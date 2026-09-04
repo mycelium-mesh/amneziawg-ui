@@ -1,0 +1,8 @@
+/.idea/
+.env
+*.bin
+*.tar
+Makefile.nerdctl
+/web-ui/wasm/
+/profiles/
+/article/

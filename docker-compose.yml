@@ -1,0 +1,28 @@
+services:
+  app:
+    image: proxy:latest
+    restart: unless-stopped
+    ports:
+      - "${WEB_UI_PORT:-54845}:${WEB_UI_PORT:-54845}/tcp"
+      - "${DEFAULT_PORT:-54844}:${DEFAULT_PORT:-54844}/udp"
+    env_file:
+      - .env
+    volumes:
+      - data:/etc/amnezia
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv6.conf.all.disable_ipv6=0
+      - net.ipv6.conf.all.forwarding=1
+      - net.ipv6.conf.default.forwarding=1
+    logging:
+      options:
+        max-size: 10m
+        max-file: 3
+volumes:
+  data:
