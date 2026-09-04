@@ -3,7 +3,9 @@ name: Build and Push Docker Image
 on:
   push:
     tags:
-      - '*'
+      # Semver only: the tag list below is built entirely out of the parsed
+      # version, and a tag that does not parse would yield no tags at all.
+      - 'v*.*.*'
 
 env:
   REGISTRY: docker.io
@@ -42,15 +44,15 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # latest=auto moves :latest only for a semver tag, so a pre-release
-          # (v3.2.0-rc1) or a non-semver tag publishes under its own name alone.
+          # The version is what names the image, so the "v" of the git tag is
+          # dropped: v3.1.1 publishes as 3.1.1, 3.1, 3 and - via latest=auto,
+          # which skips pre-releases - latest. v3.2.0-rc1 gets 3.2.0-rc1 alone.
           flavor: |
             latest=auto
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=ref,event=tag
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
