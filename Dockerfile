@@ -1,5 +1,12 @@
-# ── Application ───────────────────────────────────────────────────
-FROM golang:1.26-alpine AS builder
+ARG AWG_GO_VERSION=v3.1.20260828
+ARG AWG_TOOLS_VERSION=v3.1.20260812
+
+# ── Shared Go base ────────────────────────────────────────────────
+# Every Go stage runs on the *build* platform and cross-compiles for the
+# target one. Emulating a full arm64 toolchain under QEMU - the Fyne WASM
+# package step above all - costs tens of minutes per image; a cross build
+# costs nothing, since none of the Go binaries here need cgo.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS base
 RUN apk add --no-cache git make gcc musl-dev linux-headers
 
 WORKDIR /build
@@ -11,6 +18,7 @@ RUN --mount=type=cache,id=awg_mod,target=/go/pkg/mod \
 
 COPY . .
 
+# ── Frontend ──────────────────────────────────────────────────────
 # The frontend is a Fyne application compiled to WebAssembly. "fyne package"
 # emits the loader page, its stylesheets and the bundle straight into
 # web-ui/wasm.
@@ -18,43 +26,76 @@ COPY . .
 # The bundle then ships gzipped and nothing else: 14 MB of layer instead of 49,
 # and the server hands the file over as it is rather than compressing 49 MB
 # again on every cold request (see packedAssets in main.go).
+#
+# GOOS=js output is identical for every target platform, so this stage names no
+# TARGETARCH and BuildKit builds it once for the whole multi-platform image.
+FROM base AS web
 RUN --mount=type=cache,id=awg_mod,target=/go/pkg/mod \
     --mount=type=cache,id=awg_build,target=/root/.cache/go-build \
     cd web-ui && go tool fyne package -os wasm --name bundle --release \
     && gzip -9 wasm/bundle.wasm
 
+# ── Backend ───────────────────────────────────────────────────────
+FROM base AS builder
+ARG TARGETARCH
 RUN --mount=type=cache,id=awg_mod,target=/go/pkg/mod \
-    --mount=type=cache,id=awg_build,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/api .
+    --mount=type=cache,id=awg_build_$TARGETARCH,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags="-s -w" -o /app/api .
 
-# ── AmneziaWG upstream ───────────────────────────────────────────
-FROM golang:1.26-alpine AS awg
+# ── AmneziaWG engine ──────────────────────────────────────────────
+# Pure Go, so it cross-compiles like the API binary does.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS awg
+RUN apk add --no-cache git make
 
-RUN apk add --no-cache git make gcc musl-dev linux-headers
-
+ARG TARGETARCH
+ARG AWG_GO_VERSION
 WORKDIR /build
-
-# Pinned to explicit release tags so a rebuild can never silently pull a newer
-# (or broken) master: bump these deliberately and rebuild. Both must be from
-# the same AmneziaWG generation - the tools only know how to serialize the UAPI
-# keys the matching engine understands.
-#   amneziawg-go    https://github.com/amnezia-vpn/amneziawg-go/tags
-#   amneziawg-tools https://github.com/amnezia-vpn/amneziawg-tools/tags
-ARG AWG_GO_VERSION=v3.1.20260828
-ARG AWG_TOOLS_VERSION=v3.1.20260812
 
 # Upstream builds with a plain "go build": patch it so the binary is stripped
 # of its symbol table and of the absolute build paths, like /app/api above.
 RUN --mount=type=cache,id=awg_mod,target=/go/pkg/mod \
-    --mount=type=cache,id=awg_build,target=/root/.cache/go-build \
+    --mount=type=cache,id=awg_build_$TARGETARCH,target=/root/.cache/go-build \
     git clone --depth 1 --branch "$AWG_GO_VERSION" https://github.com/amnezia-vpn/amneziawg-go.git \
     && cd amneziawg-go \
     && sed -i 's|go build |go build -trimpath -ldflags="-s -w" |' Makefile \
     && grep -q -- '-trimpath' Makefile \
-    && make && make install
+    && env CGO_ENABLED=0 GOOS=linux GOARCH="$TARGETARCH" make \
+    && install -m 0755 amneziawg-go /usr/bin/amneziawg-go
+
+# ── AmneziaWG tools ───────────────────────────────────────────────
+# awg is C, and building it under QEMU is not viable: gcc hits an internal
+# compiler error ("cc1: Segmentation fault") somewhere in the middle of the
+# sources often enough to break releases at random. So this stage stays on the
+# build platform too and cross-compiles with clang against a real target-arch
+# musl sysroot, assembled with apk out of the very same Alpine release the
+# final image runs. gcc lands in the sysroot for its runtime bits alone -
+# crtbeginS.o and libgcc - which clang links against but never executes.
+FROM --platform=$BUILDPLATFORM alpine:3.24.1 AS awg-tools
+RUN apk add --no-cache git make clang lld
+
+ARG TARGETARCH
+ARG AWG_TOOLS_VERSION
+WORKDIR /build
+
+# The apk name for the architecture is not the Docker one, and the index for a
+# foreign arch is signed with that arch's key - both already shipped in the
+# image under /usr/share/apk/keys.
+RUN case "$TARGETARCH" in \
+        amd64) APKARCH=x86_64 ;; \
+        arm64) APKARCH=aarch64 ;; \
+        *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && echo "$APKARCH" > /apkarch \
+    && apk add --no-cache --initdb --root /sysroot --arch "$APKARCH" \
+        --keys-dir "/usr/share/apk/keys/$APKARCH" \
+        --repositories-file /etc/apk/repositories \
+        musl-dev linux-headers gcc
 
 RUN git clone --depth 1 --branch "$AWG_TOOLS_VERSION" https://github.com/amnezia-vpn/amneziawg-tools.git \
-    && cd amneziawg-tools/src && make && make WITH_WGQUICK=yes install
+    && cd amneziawg-tools/src \
+    && make CC="clang --target=$(cat /apkarch)-alpine-linux-musl --sysroot=/sysroot -fuse-ld=lld" \
+    && make WITH_WGQUICK=yes install
 
 # ── Final image ───────────────────────────────────────────────────────────────
 FROM alpine:3.24.1
@@ -74,10 +115,10 @@ RUN apk add --no-cache \
 RUN mkdir -p /var/log/amnezia /etc/amnezia/amneziawg
 
 COPY --from=awg /usr/bin/amneziawg-go /usr/bin/proxy
-COPY --from=awg /usr/bin/awg /usr/bin/awg
-COPY --from=awg /usr/bin/awg-quick /usr/bin/awg-quick
+COPY --from=awg-tools /usr/bin/awg /usr/bin/awg
+COPY --from=awg-tools /usr/bin/awg-quick /usr/bin/awg-quick
 COPY --from=builder /app/api /usr/bin/api
-COPY --from=builder /build/web-ui/wasm/ /app/web-ui/wasm/
+COPY --from=web /build/web-ui/wasm/ /app/web-ui/wasm/
 
 COPY scripts/ /app/scripts/
 RUN chmod +x /app/scripts/*.sh
