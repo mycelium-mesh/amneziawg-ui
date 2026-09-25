@@ -125,6 +125,7 @@
   "Storage": "Диск",
   "Subnet": "Подсеть",
   "Subnet {{.Subnet}}": "Подсеть {{.Subnet}}",
+  "Subnet {{.Subnet}} overlaps {{.Holder}}": "Подсеть {{.Subnet}} пересекается с {{.Holder}}",
   "Subnet, MTU, DNS, endpoint and the AmneziaWG 3.1 obfuscation parameters are generated automatically. Tick \"Advanced settings\" to fill them in yourself.": "Подсеть, MTU, DNS, endpoint и параметры обфускации AmneziaWG 3.1 генерируются автоматически. Включите «Расширенные настройки», чтобы задать их вручную.",
   "Suspend": "Приостановить",
   "Suspend \"{{.Name}}\"? The client loses its connection until reactivated.": "Приостановить «{{.Name}}»? Клиент потеряет соединение до повторной активации.",
@@ -194,5 +195,6 @@
   "{{.Count}}d": "{{.Count}}д",
   "{{.Count}}h": "{{.Count}}ч",
   "{{.Count}}m": "{{.Count}}м",
-  "{{.Field}} must be a number": "{{.Field}} должно быть числом"
+  "{{.Field}} must be a number": "{{.Field}} должно быть числом",
+  "{{.Subnet}} of server \"{{.Name}}\"": "{{.Subnet}} сервера «{{.Name}}»"
 }

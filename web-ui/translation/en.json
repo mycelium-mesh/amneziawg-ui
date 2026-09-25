@@ -125,6 +125,7 @@
   "Storage": "Storage",
   "Subnet": "Subnet",
   "Subnet {{.Subnet}}": "Subnet {{.Subnet}}",
+  "Subnet {{.Subnet}} overlaps {{.Holder}}": "Subnet {{.Subnet}} overlaps {{.Holder}}",
   "Subnet, MTU, DNS, endpoint and the AmneziaWG 3.1 obfuscation parameters are generated automatically. Tick \"Advanced settings\" to fill them in yourself.": "Subnet, MTU, DNS, endpoint and the AmneziaWG 3.1 obfuscation parameters are generated automatically. Tick \"Advanced settings\" to fill them in yourself.",
   "Suspend": "Suspend",
   "Suspend \"{{.Name}}\"? The client loses its connection until reactivated.": "Suspend \"{{.Name}}\"? The client loses its connection until reactivated.",
@@ -188,5 +189,6 @@
   "{{.Count}}d": "{{.Count}}d",
   "{{.Count}}h": "{{.Count}}h",
   "{{.Count}}m": "{{.Count}}m",
-  "{{.Field}} must be a number": "{{.Field}} must be a number"
+  "{{.Field}} must be a number": "{{.Field}} must be a number",
+  "{{.Subnet}} of server \"{{.Name}}\"": "{{.Subnet}} of server \"{{.Name}}\""
 }

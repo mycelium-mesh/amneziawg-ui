@@ -82,14 +82,14 @@ func (s *state) TakenPorts() map[int]string {
 	return taken
 }
 
-// TakenSubnets is the set of subnets existing servers occupy.
-func (s *state) TakenSubnets() map[string]bool {
+// TakenSubnets maps every subnet an existing server occupies to that server.
+func (s *state) TakenSubnets() map[string]string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	taken := make(map[string]bool, len(s.servers))
+	taken := make(map[string]string, len(s.servers))
 	for _, server := range s.servers {
-		taken[strings.TrimSpace(server.Subnet)] = true
+		taken[strings.TrimSpace(server.Subnet)] = lang.L("{{.Subnet}} of server \"{{.Name}}\"", map[string]any{"Subnet": strings.TrimSpace(server.Subnet), "Name": server.Name})
 	}
 	return taken
 }

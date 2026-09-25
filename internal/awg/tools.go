@@ -1,6 +1,7 @@
 package awg
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,7 +40,7 @@ func (t *Tools) Available() bool {
 // QuickUp brings an interface up from its .conf.
 func (t *Tools) QuickUp(iface string) error {
 	if _, err := t.run.Run(fmt.Sprintf("%s up %s", filepath.Join(t.BinDir, "awg-quick"), iface)); err != nil {
-		return fmt.Errorf("awg-quick up %s: %w", iface, err)
+		return fmt.Errorf("awg-quick up %s: %w", iface, quickFailure(err))
 	}
 	return nil
 }
@@ -47,9 +48,43 @@ func (t *Tools) QuickUp(iface string) error {
 // QuickDown tears an interface down.
 func (t *Tools) QuickDown(iface string) error {
 	if _, err := t.run.Run(fmt.Sprintf("%s down %s", filepath.Join(t.BinDir, "awg-quick"), iface)); err != nil {
-		return fmt.Errorf("awg-quick down %s: %w", iface, err)
+		return fmt.Errorf("awg-quick down %s: %w", iface, quickFailure(err))
 	}
 	return nil
+}
+
+// quickFailure cuts awg-quick's stderr down to the output of the command that
+// failed. awg-quick echoes each step as "[#] command", and a start that falls
+// back to userspace also carries the kernel attempt's "Unknown device type",
+// a "[!]" notice and a box-drawn banner - none of it the reason, all of it
+// ahead of the one line that is. The last step with output is that line: the
+// steps after a failure are awg-quick's own cleanup, and they say nothing.
+func quickFailure(err error) error {
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) {
+		return err
+	}
+	var last, current []string
+	inBanner := false
+	for _, line := range strings.Split(exitErr.Stderr, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "┌"):
+			inBanner = true
+		case strings.HasPrefix(line, "└"):
+			inBanner = false
+		case inBanner, line == "", strings.HasPrefix(line, "[!]"):
+		case strings.HasPrefix(line, "[#]"):
+			current = nil
+		default:
+			current = append(current, line)
+			last = current
+		}
+	}
+	if len(last) == 0 {
+		return err
+	}
+	return &ExitError{Err: exitErr.Err, Stderr: strings.Join(last, "\n")}
 }
 
 // SyncConf pushes the interface's .conf onto the running interface without

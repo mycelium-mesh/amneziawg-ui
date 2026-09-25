@@ -23,10 +23,10 @@ func (s pageState) ServerMTU() int {
 
 func (s pageState) TakenPorts() map[int]string { return map[int]string{} }
 
-func (s pageState) TakenSubnets() map[string]bool {
-	taken := map[string]bool{}
+func (s pageState) TakenSubnets() map[string]string {
+	taken := map[string]string{}
 	for _, subnet := range s.subnets {
-		taken[subnet] = true
+		taken[subnet] = `server "srv"`
 	}
 	return taken
 }
@@ -104,6 +104,16 @@ func TestSimpleModePicksAFreeSubnet(t *testing.T) {
 	f := &Form{state: pageState{subnets: []string{"10.0.0.0/24", "10.1.0.0/24"}}}
 
 	if got := f.generated("third", 54846).Subnet; got != "10.2.0.0/24" {
+		t.Errorf("Subnet = %q, want 10.2.0.0/24", got)
+	}
+}
+
+// An existing server on a wider block covers every /24 inside it, so the
+// simple mode has to look past it rather than match subnets as strings.
+func TestSimpleModeSkipsSubnetsInsideAWiderOne(t *testing.T) {
+	f := &Form{state: pageState{subnets: []string{"10.0.0.0/15"}}}
+
+	if got := f.generated("second", 54845).Subnet; got != "10.2.0.0/24" {
 		t.Errorf("Subnet = %q, want 10.2.0.0/24", got)
 	}
 }

@@ -2,6 +2,7 @@ package awg_test
 
 import (
 	"encoding/base64"
+	"errors"
 	"testing"
 
 	"amneziawg-web-ui/internal/awg"
@@ -110,5 +111,36 @@ func TestIPTablesScriptsAreSkippedWhenNotDeployed(t *testing.T) {
 	tools.CleanupIPTables("wg-x", "10.0.1.0/24")
 	if len(run.Commands) != 0 {
 		t.Errorf("scripts that do not exist were run: %v", run.Commands)
+	}
+}
+
+// A start that fell back to userspace and then had its .conf rejected: what
+// reaches the user is the rejection, not awg-quick's trace and banner.
+func TestQuickUpReportsTheFailingStep(t *testing.T) {
+	stderr := "[#] ip link add wg-1 type amneziawg\n" +
+		"Error: Unknown device type.\n" +
+		"[!] Missing WireGuard (Amnezia VPN) kernel module. Falling back to slow userspace implementation.\n" +
+		"[#] proxy wg-1\n" +
+		"┌────┐\n│  Running amneziawg-go is not required  │\n| https://github.com/amnezia-vpn/amneziawg-linux-kernel-module │\n└────┘\n" +
+		"[#] awg setconf wg-1 /dev/fd/63\n" +
+		"Line unrecognized: `BogusKey=42'\n" +
+		"Configuration parsing error\n" +
+		"[#] ip link delete dev wg-1"
+	run := awgtest.New().Fail("/usr/bin/awg-quick up", &awg.ExitError{Err: errors.New("exit status 1"), Stderr: stderr})
+
+	err := awg.New(run).QuickUp("wg-1")
+	want := "awg-quick up wg-1: exit status 1: Line unrecognized: `BogusKey=42'\nConfiguration parsing error"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %q, want %q", err, want)
+	}
+}
+
+// Without the "[#]" trace there is nothing to cut, and stderr goes out whole.
+func TestQuickUpKeepsUntracedStderr(t *testing.T) {
+	run := awgtest.New().Fail("/usr/bin/awg-quick up", &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "awg-quick: `wg-1' already exists"})
+
+	err := awg.New(run).QuickUp("wg-1")
+	if want := "awg-quick up wg-1: exit status 1: awg-quick: `wg-1' already exists"; err == nil || err.Error() != want {
+		t.Fatalf("err = %q, want %q", err, want)
 	}
 }

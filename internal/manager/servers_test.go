@@ -41,6 +41,53 @@ func TestCreateServerRejectsTheWebUIsOwnPort(t *testing.T) {
 	}
 }
 
+// A port awg-quick cannot bind is a bad request: accepted, it would be saved
+// and then fail only when the server is started.
+func TestCreateServerRejectsAPortOutOfRange(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	for _, port := range []int{-5, api.MaxPort + 1} {
+		_, err := m.CreateServer(api.CreateServerRequest{Name: "second", Port: port, MTU: 1420})
+		if !errors.Is(err, ErrInvalid) {
+			t.Fatalf("port %d: want ErrInvalid, got %v", port, err)
+		}
+	}
+	if got := len(m.cfg.Servers); got != 1 {
+		t.Fatalf("nothing should have been created, got %d servers", got)
+	}
+}
+
+// A subnet sharing addresses with another server's is a conflict, whether it
+// is the same block or one that contains or sits inside it.
+func TestCreateServerRejectsAnOverlappingSubnet(t *testing.T) {
+	m, _ := newTestManager(t) // "srv" holds 10.0.1.0/24
+
+	for _, subnet := range []string{"10.0.1.0/24", "10.0.0.0/16", "10.0.1.128/25"} {
+		_, err := m.CreateServer(api.CreateServerRequest{Name: "second", Port: 54846, Subnet: subnet, MTU: 1420})
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("subnet %s: want ErrConflict, got %v", subnet, err)
+		}
+		if !strings.Contains(err.Error(), `"srv"`) {
+			t.Fatalf("subnet %s: error should name the server holding it, got %v", subnet, err)
+		}
+	}
+	if got := len(m.cfg.Servers); got != 1 {
+		t.Fatalf("nothing should have been created, got %d servers", got)
+	}
+}
+
+// A subnet that is not an IPv4 block with room for a client is a bad request.
+func TestCreateServerRejectsAMalformedSubnet(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	for _, subnet := range []string{"abc", "10.0.2.0", "10.0.2.0/31", "fd00::/64"} {
+		_, err := m.CreateServer(api.CreateServerRequest{Name: "second", Port: 54846, Subnet: subnet, MTU: 1420})
+		if !errors.Is(err, ErrInvalid) {
+			t.Fatalf("subnet %q: want ErrInvalid, got %v", subnet, err)
+		}
+	}
+}
+
 func TestPortInUse(t *testing.T) {
 	m, _ := newTestManager(t)
 

@@ -20,8 +20,7 @@ import (
 )
 
 var (
-	subnetPattern = regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$`)
-	ipPattern     = regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}$`)
+	ipPattern = regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}$`)
 )
 
 // What the engine accepts, and the checks against it, live in the shared api
@@ -53,8 +52,9 @@ type State interface {
 	// TakenPorts maps every port already spoken for to what holds it: an
 	// existing server, or the panel's own listener.
 	TakenPorts() map[int]string
-	// TakenSubnets is the set of subnets existing servers occupy.
-	TakenSubnets() map[string]bool
+	// TakenSubnets maps every subnet an existing server occupies to that
+	// server.
+	TakenSubnets() map[string]string
 }
 
 // Form is the panel. It has two modes: the default one asks for a name and a
@@ -215,6 +215,9 @@ func (f *Form) toggleOpen() {
 	// Offer a port nothing is listening on yet, so creating a second server is
 	// still a matter of typing a name and pressing the button.
 	f.port.SetText(f.nextFreePort())
+	if _, taken := f.subnetHolder(f.subnet.Text); taken {
+		f.subnet.SetText(f.nextFreeSubnet())
+	}
 	f.seedMTU()
 
 	f.body.Show()
@@ -422,12 +425,12 @@ func (f *Form) mtuOrDefault() int {
 // server has taken. An unparsable value is left alone - build() reports it.
 func (f *Form) nextFreePort() string {
 	port, err := strconv.Atoi(strings.TrimSpace(f.port.Text))
-	if err != nil || port < 1 || port > 65535 {
+	if err != nil || port < api.MinPort || port > api.MaxPort {
 		return f.port.Text
 	}
 
 	taken := f.state.TakenPorts()
-	for ; port <= 65535; port++ {
+	for ; port <= api.MaxPort; port++ {
 		if _, used := taken[port]; !used {
 			return strconv.Itoa(port)
 		}
@@ -435,18 +438,27 @@ func (f *Form) nextFreePort() string {
 	return f.port.Text
 }
 
-// nextFreeSubnet picks a /24 no existing server has taken, so servers created
-// in the simple mode never collide with each other.
+// nextFreeSubnet picks a /24 that overlaps no existing server's subnet, so
+// servers created in the simple mode never collide with each other.
 func (f *Form) nextFreeSubnet() string {
-	taken := f.state.TakenSubnets()
-
 	for i := range 256 {
 		candidate := fmt.Sprintf("10.%d.0.0/24", i)
-		if !taken[candidate] {
+		if _, taken := f.subnetHolder(candidate); !taken {
 			return candidate
 		}
 	}
 	return defaultSubnet
+}
+
+// subnetHolder names the existing server whose subnet shares addresses with
+// this one, the way the backend's check will.
+func (f *Form) subnetHolder(subnet string) (string, bool) {
+	for taken, holder := range f.state.TakenSubnets() {
+		if api.SubnetsOverlap(strings.TrimSpace(subnet), taken) {
+			return holder, true
+		}
+	}
+	return "", false
 }
 
 func (f *Form) showErrors(messages []string) {
@@ -470,7 +482,7 @@ func (f *Form) build() (api.CreateServerRequest, []string) {
 
 	port, err := strconv.Atoi(strings.TrimSpace(f.port.Text))
 	switch taken, used := f.state.TakenPorts()[port]; {
-	case err != nil, port < 1, port > 65535:
+	case err != nil, port < api.MinPort, port > api.MaxPort:
 		problems = append(problems, lang.L("Port must be between 1 and 65535"))
 	case used:
 		problems = append(problems, lang.L("Port {{.Port}} is already used by {{.Holder}}", map[string]any{"Port": port, "Holder": taken}))
@@ -492,8 +504,10 @@ func (f *Form) build() (api.CreateServerRequest, []string) {
 		Obfuscation: &obfuscation,
 	}
 
-	if !subnetPattern.MatchString(req.Subnet) {
+	if _, err := api.ParseSubnet(req.Subnet); err != nil {
 		problems = append(problems, lang.L("Valid subnet is required (e.g. 10.0.0.0/24)"))
+	} else if holder, taken := f.subnetHolder(req.Subnet); taken {
+		problems = append(problems, lang.L("Subnet {{.Subnet}} overlaps {{.Holder}}", map[string]any{"Subnet": req.Subnet, "Holder": holder}))
 	}
 
 	mtu, err := strconv.Atoi(strings.TrimSpace(f.mtu.Text))

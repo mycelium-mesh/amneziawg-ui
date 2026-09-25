@@ -121,12 +121,23 @@ func (m *Manager) CreateServer(req api.CreateServerRequest) (*api.Server, error)
 	if port == 0 {
 		port = m.settings.DefaultPort
 	}
+	if port < api.MinPort || port > api.MaxPort {
+		return nil, fmt.Errorf("port must be between %d and %d, got %d: %w", api.MinPort, api.MaxPort, port, ErrInvalid)
+	}
 	if holder, ok := m.portInUse(port); ok {
 		return nil, fmt.Errorf("port %d is already used by %s: %w", port, holder, ErrConflict)
 	}
-	subnet := req.Subnet
+	subnet := strings.TrimSpace(req.Subnet)
 	if subnet == "" {
 		subnet = m.settings.DefaultSubnet
+	}
+	parsed, err := api.ParseSubnet(subnet)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	subnet = parsed.String()
+	if holder, ok := m.subnetInUse(subnet); ok {
+		return nil, fmt.Errorf("subnet %s overlaps %s: %w", subnet, holder, ErrConflict)
 	}
 	mtu := req.MTU
 	if mtu == 0 {
@@ -189,7 +200,7 @@ func (m *Manager) CreateServer(req api.CreateServerRequest) (*api.Server, error)
 	network, prefix := netutil.SplitCIDR(subnet)
 	serverIP := netutil.ServerIP(network)
 
-	err := wgconf.WriteServerConf(configPath, wgconf.ServerInterface{
+	err = wgconf.WriteServerConf(configPath, wgconf.ServerInterface{
 		PrivateKey:  keys.Private,
 		Address:     serverIP + "/" + prefix,
 		ListenPort:  port,
@@ -279,6 +290,20 @@ func (m *Manager) portInUse(port int) (string, bool) {
 	for i := range m.cfg.Servers {
 		if m.cfg.Servers[i].Port == port {
 			return fmt.Sprintf("server %q", m.cfg.Servers[i].Name), true
+		}
+	}
+	return "", false
+}
+
+// subnetInUse names the server whose subnet shares addresses with this one,
+// if any does. Overlapping subnets would route one client address to two
+// interfaces, and the kernel settles that by sending it to only one of them.
+func (m *Manager) subnetInUse(subnet string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for i := range m.cfg.Servers {
+		if api.SubnetsOverlap(subnet, m.cfg.Servers[i].Subnet) {
+			return fmt.Sprintf("%s of server %q", m.cfg.Servers[i].Subnet, m.cfg.Servers[i].Name), true
 		}
 	}
 	return "", false

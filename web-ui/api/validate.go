@@ -21,6 +21,11 @@ import (
 // Sources are the AmneziaWG 3.1 parameter reference
 // (docs.amnezia.org/documentation/amnezia-wg) and amneziawg-go itself.
 const (
+	// MinPort and MaxPort bound a server's UDP listen port; awg-quick fails
+	// on anything outside them, but only once the server is started.
+	MinPort = 1
+	MaxPort = 65535
+
 	// MinMTU and MaxMTU bound a server's tunnel MTU.
 	MinMTU = 1280
 	MaxMTU = 1440
