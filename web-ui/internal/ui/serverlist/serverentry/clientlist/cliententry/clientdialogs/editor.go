@@ -5,6 +5,7 @@ package clientdialogs
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"fyne.io/fyne/v2/lang"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	datepicker "github.com/sdassow/fyne-datepicker"
 
 	"amneziawg-web-ui/web-ui/api"
 	"amneziawg-web-ui/web-ui/internal/ui/dialogs"
@@ -97,10 +99,11 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 	}
 
 	if editing {
+		pick := widgets.NewButton("", theme.CalendarIcon(), func() { pickSuspendTime(e, suspendAt) })
 		clear := widgets.NewButton("", theme.CancelIcon(), func() { suspendAt.SetText("") })
 		items = append(items, &widget.FormItem{
 			Text:     lang.L("Auto-suspend at"),
-			Widget:   container.NewBorder(nil, nil, nil, clear, suspendAt),
+			Widget:   container.NewBorder(nil, nil, nil, container.NewHBox(pick, clear), suspendAt),
 			HintText: lang.L("local time, format {{.Layout}}; empty disables auto-suspension", map[string]any{"Layout": SuspendLayout}),
 		})
 		created := time.Unix(int64(client.CreatedAt), 0).Local().Format("2006-01-02 15:04:05")
@@ -150,6 +153,65 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 		add(e, server, strings.TrimSpace(name.Text), routes, applyI.Checked, settings)
 		return true
 	})
+}
+
+// pickSuspendTime opens a calendar over the editor and writes the chosen
+// moment back into the entry, which stays the one source of truth: typing a
+// time by hand keeps working, and the picker starts from whatever the entry
+// holds, or from now when it holds nothing parseable.
+//
+// Only the calendar comes from fyne-datepicker. Its NewDateTimePicker loses
+// the hour and minute: they are written into a variable of their own, while
+// the confirm callback reads the date picker's, so the time the user set never
+// reaches it. The time row is built here instead and joined with the date on
+// confirm.
+//
+// The calendar stays in English in both languages: its "datepicker.*" keys
+// sit in the translation files with the English text only because lang.X
+// logs a "Translation failure" for every key a language lacks. Translated
+// month names would also break it - on the arrows it selects
+// time.Month.String(), which is English and matches none of the options.
+func pickSuspendTime(e *env.Env, suspendAt *widget.Entry) {
+	when := time.Now().Truncate(time.Minute)
+	if parsed, err := time.ParseInLocation(SuspendLayout, strings.TrimSpace(suspendAt.Text), time.Local); err == nil {
+		when = parsed
+	}
+
+	hour := widget.NewSelectEntry(twoDigits(24))
+	hour.SetText(when.Format("15"))
+	minute := widget.NewSelectEntry(twoDigits(60))
+	minute.SetText(when.Format("04"))
+	// A select entry asks for the width of its text alone, which clips two
+	// digits against the dropdown arrow.
+	field := fyne.NewSize(80, hour.MinSize().Height)
+	timeRow := container.NewHBox(widget.NewLabel(lang.L("Time")),
+		container.NewGridWrap(field, hour), widget.NewLabel(":"), container.NewGridWrap(field, minute))
+
+	var date time.Time
+	calendar := datepicker.NewDatePicker(when, time.Monday, func(chosen time.Time, _ bool) { date = chosen })
+
+	content := container.NewBorder(nil, timeRow, nil, nil, calendar)
+	dialogs.ShowForm(e.Win, lang.L("Auto-suspend at"), lang.L("OK"), lang.L("Cancel"), content, dialogs.Size(e.Win, 460, 520), func() bool {
+		h, errH := strconv.Atoi(strings.TrimSpace(hour.Text))
+		m, errM := strconv.Atoi(strings.TrimSpace(minute.Text))
+		if errH != nil || errM != nil || h < 0 || h > 23 || m < 0 || m > 59 {
+			e.Notify.Fail(errors.New(lang.L("time must be hours 00-23 and minutes 00-59")))
+			return false
+		}
+		calendar.OnActioned(true)
+		chosen := time.Date(date.Year(), date.Month(), date.Day(), h, m, 0, 0, time.Local)
+		suspendAt.SetText(chosen.Format(SuspendLayout))
+		return true
+	})
+}
+
+// twoDigits lists "00" up to n-1, the options of an hour or minute field.
+func twoDigits(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("%02d", i)
+	}
+	return out
 }
 
 func add(e *env.Env, server api.Server, name, allowedIPs string, applyI bool, settings api.ISettings) {

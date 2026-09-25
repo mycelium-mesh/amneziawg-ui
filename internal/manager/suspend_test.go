@@ -37,3 +37,29 @@ func TestSuspendDueSuspendsOnlyOverdueActiveClients(t *testing.T) {
 		}
 	}
 }
+
+// A scheduled time fires once: it is cleared when it suspends the client, so
+// switching the client back on by hand is not undone on the next tick.
+func TestSuspendDueFiresOnce(t *testing.T) {
+	m, _ := newTestManager(t)
+	past := float64(time.Now().Add(-time.Minute).Unix())
+
+	client, _, _ := m.AddClient("s1", api.AddClientRequest{Name: "c"})
+	if _, _, err := m.UpdateClientSuspendTime("s1", client.ID, &past); err != nil {
+		t.Fatal(err)
+	}
+
+	m.suspendDue(time.Now())
+	c := m.Clients("s1")[0]
+	if c.Status != "suspended" || c.SuspendAt != nil {
+		t.Fatalf("after the time: status = %q, suspend_at = %v, want suspended and cleared", c.Status, c.SuspendAt)
+	}
+
+	if _, err := m.ActivateClient("s1", client.ID); err != nil {
+		t.Fatal(err)
+	}
+	m.suspendDue(time.Now())
+	if c := m.Clients("s1")[0]; c.Status != "active" {
+		t.Errorf("after activating by hand: status = %q, want active", c.Status)
+	}
+}

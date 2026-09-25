@@ -6,6 +6,7 @@ tool fyne.io/tools/cmd/fyne
 
 require (
 	fyne.io/fyne/v2 v2.8.1
+	github.com/sdassow/fyne-datepicker v0.0.0-20250403132905-bf906d02ba0c
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 )
 

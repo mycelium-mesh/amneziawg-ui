@@ -112,12 +112,42 @@ func (m *Manager) runSuspender() {
 // suspendDue is one pass of the suspender.
 func (m *Manager) suspendDue(now time.Time) {
 	for _, it := range m.findClientsPastSuspendTime(float64(now.Unix())) {
-		if _, err := m.SuspendClient(it.serverID, it.clientID); err != nil {
+		ifaceName, err := m.autoSuspendLocked(it.serverID, it.clientID, float64(now.Unix()))
+		if err != nil {
 			fmt.Printf("Auto-suspend failed for client %s: %v\n", it.clientID, err)
 			continue
 		}
+		if ifaceName == "" {
+			continue
+		}
+		m.saveOrLog("client auto-suspend")
+		m.syncLiveConfig(ifaceName)
 		fmt.Printf("Auto-suspended client %s at %s\n", it.clientID, now.Format(time.RFC1123))
 	}
+}
+
+// autoSuspendLocked suspends a client whose scheduled time has passed and
+// clears the schedule, so the time fires once: a client switched back on by
+// hand afterwards stays on instead of being suspended again on the next tick.
+// The schedule is checked again under the write lock, since it may have been
+// moved or cleared since findClientsPastSuspendTime read it; an empty
+// ifaceName means there was nothing to do.
+func (m *Manager) autoSuspendLocked(serverID, clientID string, now float64) (ifaceName string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	srv, client := m.findClient(serverID, clientID)
+	if srv == nil || client == nil || client.Status != "active" || client.SuspendAt == nil || now < *client.SuspendAt {
+		return "", nil
+	}
+
+	if err := wgconf.ParkPeer(srv.ConfigPath, client); err != nil {
+		return "", err
+	}
+	client.Status = "suspended"
+	client.SuspendAt = nil
+
+	return srv.Interface, nil
 }
 
 // findClientsPastSuspendTime locks and returns all active clients whose
