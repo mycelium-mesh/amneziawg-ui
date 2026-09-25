@@ -50,10 +50,17 @@ func (m *Manager) TrafficSnapshot() api.TrafficSnapshot {
 	}
 }
 
+// onlineWindow is how old a handshake may be for the peer to count as
+// online. WireGuard renews the session every two minutes while traffic
+// flows and drops the keys after three (REJECT_AFTER_TIME): a peer quiet for
+// longer than that has no live session.
+const onlineWindow = 3 * time.Minute
+
 // peerTraffic joins what `awg show` reports with the clients the server
 // owns, keyed by client ID. srv is a snapshot, so no lock is needed.
 func peerTraffic(srv *api.Server, peers map[string]awg.PeerStats) map[string]api.ClientTraffic {
 	result := map[string]api.ClientTraffic{}
+	now := time.Now()
 	for _, c := range srv.Clients {
 		p, ok := peers[c.ClientPublicKey]
 		if !ok {
@@ -64,6 +71,7 @@ func peerTraffic(srv *api.Server, peers map[string]awg.PeerStats) map[string]api
 			Sent:          api.FormatBytes(float64(p.TXBytes)),
 			LastHandshake: p.LastHandshake,
 			Endpoint:      p.Endpoint,
+			Online:        !p.HandshakeAt.IsZero() && now.Sub(p.HandshakeAt) < onlineWindow,
 		}
 	}
 	return result

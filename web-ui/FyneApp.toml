@@ -3,7 +3,7 @@ Icon = "Icon.png"
 Name = "AmneziaWG Web UI"
 ID = "io.amnezia.webui"
 Version = "3.1.7"
-Build = 54
+Build = 55
 
 [Migrations]
 fyneDo = true

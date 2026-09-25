@@ -144,12 +144,14 @@ type UpdateSuspendTimeRequest struct {
 	SuspendAt *string `json:"suspend_at"` // ISO 8601 or null
 }
 
-// ClientTraffic holds traffic statistics for a single client.
+// ClientTraffic holds traffic statistics for a single client. Online is a
+// handshake recent enough that the session keys are still live.
 type ClientTraffic struct {
 	Received      string `json:"received"`
 	Sent          string `json:"sent"`
 	LastHandshake string `json:"last_handshake"`
 	Endpoint      string `json:"endpoint"`
+	Online        bool   `json:"online"`
 }
 
 // InterfaceTraffic holds the RX/TX counters of one WireGuard interface: the

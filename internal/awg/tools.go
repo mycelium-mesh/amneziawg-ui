@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Tools wraps the host commands behind names that say what they are for.
@@ -155,11 +156,13 @@ func (t *Tools) RouteSourceIP() (string, error) {
 }
 
 // PeerStats is what `awg show` reports about one peer: the exact byte counts
-// of the `transfer` listing, and the endpoint and handshake age as the plain
-// listing words them.
+// of the `transfer` listing, the endpoint and handshake age as the plain
+// listing words them, and the moment of that handshake from the
+// `latest-handshakes` listing (zero when the peer never shook hands).
 type PeerStats struct {
 	RXBytes, TXBytes        uint64
 	LastHandshake, Endpoint string
+	HandshakeAt             time.Time
 }
 
 // ShowPeers reads the peers of an interface, keyed by public key. The bytes
@@ -180,6 +183,13 @@ func (t *Tools) ShowPeers(iface string) map[string]PeerStats {
 		p := peers[key]
 		p.RXBytes, p.TXBytes = tr.RXBytes, tr.TXBytes
 		peers[key] = p
+	}
+	handshakes, _ := t.run.Run(fmt.Sprintf("%s show %s latest-handshakes", awg, iface))
+	for key, at := range ParseLatestHandshakes(handshakes) {
+		if p, ok := peers[key]; ok {
+			p.HandshakeAt = at
+			peers[key] = p
+		}
 	}
 	return peers
 }
@@ -232,6 +242,25 @@ func ParseTransfer(output string) map[string]Transfer {
 			continue
 		}
 		peers[fields[0]] = Transfer{RXBytes: rx, TXBytes: tx}
+	}
+	return peers
+}
+
+// ParseLatestHandshakes reads `awg show <iface> latest-handshakes`, one
+// "<key>\t<unix seconds>" line per peer. A zero timestamp is a peer that
+// never shook hands and is left out, as are lines that do not fit.
+func ParseLatestHandshakes(output string) map[string]time.Time {
+	peers := map[string]time.Time{}
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		sec, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil || sec <= 0 {
+			continue
+		}
+		peers[fields[0]] = time.Unix(sec, 0)
 	}
 	return peers
 }

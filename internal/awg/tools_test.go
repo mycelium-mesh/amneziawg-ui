@@ -56,8 +56,19 @@ func TestShowPeersTakesBytesFromTheTransferListing(t *testing.T) {
 	if len(peers) != 2 {
 		t.Errorf("peers = %v, want the two of the listing", peers)
 	}
+	if !peers["PEER1"].HandshakeAt.IsZero() {
+		t.Errorf("PEER1 handshake = %v, want zero without the listing", peers["PEER1"].HandshakeAt)
+	}
 	if tools.ShowPeers("wg-down") != nil {
 		t.Error("a down interface reported peers")
+	}
+}
+
+// A zero timestamp is a peer that never shook hands, not the Unix epoch.
+func TestParseLatestHandshakes(t *testing.T) {
+	got := awg.ParseLatestHandshakes("PEER1\t1700000000\nPEER2\t0\nbroken\nPEER3\tsoon\n")
+	if len(got) != 1 || got["PEER1"].Unix() != 1700000000 {
+		t.Errorf("handshakes = %v, want only PEER1", got)
 	}
 }
 

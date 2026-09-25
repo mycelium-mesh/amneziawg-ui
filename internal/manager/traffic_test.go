@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -18,11 +19,16 @@ func TestTrafficSnapshotJoinsPeersWithClients(t *testing.T) {
 		"interface: wg-test-absent\n\npeer: "+seen.ClientPublicKey+"\n  endpoint: 203.0.113.5:1\n\npeer: STRANGER\n")
 	run.Stub("/usr/bin/awg show wg-test-absent transfer",
 		seen.ClientPublicKey+"\t1024\t2048\nSTRANGER\t6\t8\n")
+	run.Stub("/usr/bin/awg show wg-test-absent latest-handshakes",
+		seen.ClientPublicKey+"\t"+strconv.FormatInt(time.Now().Add(-time.Minute).Unix(), 10)+"\nSTRANGER\t0\n")
 
 	snap := m.TrafficSnapshot()
 	peers := snap.ClientTraffic["s1"]
 	if peers[seen.ID].Received != "1.00 KB" || peers[seen.ID].Sent != "2.00 KB" || peers[seen.ID].Endpoint != "203.0.113.5:1" {
 		t.Errorf("seen client = %+v", peers[seen.ID])
+	}
+	if !peers[seen.ID].Online || peers[quiet.ID].Online {
+		t.Errorf("online: seen = %v, quiet = %v", peers[seen.ID].Online, peers[quiet.ID].Online)
 	}
 	if peers[quiet.ID].Received != "0 B" || peers[quiet.ID].LastHandshake != "Never" {
 		t.Errorf("quiet client = %+v", peers[quiet.ID])

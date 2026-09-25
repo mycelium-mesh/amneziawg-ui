@@ -28,6 +28,7 @@ type Row struct {
 	server api.Server
 	client api.Client
 
+	online    *canvas.Circle
 	rx        *canvas.Text
 	tx        *canvas.Text
 	handshake *canvas.Text
@@ -42,6 +43,7 @@ func New(e *env.Env, server api.Server, client api.Client) *Row {
 		env:       e,
 		server:    server,
 		client:    client,
+		online:    canvas.NewCircle(style.Muted),
 		rx:        widgets.SmallText("—", style.Muted),
 		tx:        widgets.SmallText("—", style.Muted),
 		handshake: widgets.SmallText(handshakeText("—"), style.Muted),
@@ -69,9 +71,11 @@ func New(e *env.Env, server api.Server, client api.Client) *Row {
 		labels.Add(container.NewCenter(widgets.Badge(lang.L("auto-suspend {{.When}}", map[string]any{"When": when}), style.Error)))
 	}
 
-	// The counters carry the same glyphs as the dashboard tiles: download
-	// for received, upload for sent.
+	// The presence light is the header's status dot: green while the peer
+	// holds a live session, muted otherwise. The counters carry the same
+	// glyphs as the dashboard tiles: download for received, upload for sent.
 	counters := container.NewHBox(
+		container.NewCenter(container.NewGridWrap(fyne.NewSize(10, 10), r.online)),
 		container.NewCenter(widgets.SmallIcon(theme.DownloadIcon())), r.rx,
 		container.NewCenter(widgets.SmallIcon(theme.UploadIcon())), r.tx,
 		widgets.SmallText("·", style.Border),
@@ -121,6 +125,12 @@ func (r *Row) CanvasObject() fyne.CanvasObject {
 // Apply pushes one traffic snapshot into the labels. Must run on the UI
 // goroutine.
 func (r *Row) Apply(data api.ClientTraffic) {
+	r.online.FillColor = style.Muted
+	if data.Online {
+		r.online.FillColor = style.Success
+	}
+	r.online.Refresh()
+
 	r.rx.Text = data.Received
 	r.rx.Refresh()
 	r.tx.Text = data.Sent
