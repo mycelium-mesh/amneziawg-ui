@@ -30,7 +30,6 @@
   "Clients": "Клиенты",
   "Clients ({{.Count}})": "Клиенты ({{.Count}})",
   "Close": "Закрыть",
-  "Configuration preview": "Предпросмотр конфигурации",
   "Copied to clipboard": "Скопировано в буфер обмена",
   "Copy": "Копировать",
   "Copy this link into the AmneziaVPN app - it is recognised as AmneziaWG 3.x": "Скопируйте эту ссылку в приложение AmneziaVPN — она распознаётся как AmneziaWG 3.x",

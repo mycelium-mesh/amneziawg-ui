@@ -190,7 +190,6 @@ type ServerInfo struct {
 	ClientsCount       int                `json:"clients_count"`
 	Clients            []Client           `json:"clients"`
 	CreatedAt          float64            `json:"created_at"`
-	ConfigPreview      string             `json:"config_preview"`
 	PublicKey          string             `json:"public_key"`
 	DNS                []string           `json:"dns"`
 	DefaultISettings   ISettings          `json:"default_i_settings"`

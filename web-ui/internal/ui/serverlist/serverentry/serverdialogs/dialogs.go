@@ -1,5 +1,5 @@
 // Package serverdialogs holds the dialogs a server card opens: the overview
-// with the parameters and the config preview, and the raw .conf viewer.
+// with the parameters, and the raw .conf viewer.
 package serverdialogs
 
 import (
@@ -81,12 +81,6 @@ func presentConfig(e *env.Env, info api.ServerInfo) {
 		body.Add(widgets.InfoGrid(rows))
 		body.Add(widgets.MutedNote(lang.L("These defaults are used for new clients when \"Apply I-settings\" is enabled.")))
 	}
-
-	body.Add(widgets.Separator())
-	body.Add(widgets.SectionTitle(lang.L("Configuration preview")))
-	preview, _ := widgets.MonospaceView(info.ConfigPreview)
-	preview.SetMinRowsVisible(10)
-	body.Add(preview)
 
 	full := widgets.NewButton(lang.L("View full config"), theme.DocumentIcon(), func() {
 		showRaw(e, info.ID)

@@ -109,3 +109,7 @@ the credentials for the realm:
 
 The e2e suite does this properly through `HttpCredentials` on the browser
 context in `e2e/main_test.go`.
+
+# Changelog
+
+`./CHANGELOG.md`

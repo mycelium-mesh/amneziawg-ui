@@ -61,15 +61,6 @@ func (m *Manager) ServerInfo(id string) (api.ServerInfo, error) {
 	status := m.serverStatus(srv.Interface)
 	clients := m.Clients(id)
 
-	preview := ""
-	if data, err := os.ReadFile(srv.ConfigPath); err == nil {
-		lines := strings.Split(string(data), "\n")
-		if len(lines) > 10 {
-			lines = lines[:10]
-		}
-		preview = strings.Join(lines, "\n")
-	}
-
 	return api.ServerInfo{
 		ID:                 srv.ID,
 		Name:               srv.Name,
@@ -87,7 +78,6 @@ func (m *Manager) ServerInfo(id string) (api.ServerInfo, error) {
 		ClientsCount:       len(clients),
 		Clients:            clients,
 		CreatedAt:          srv.CreatedAt,
-		ConfigPreview:      preview,
 		PublicKey:          srv.ServerPublicKey,
 		DNS:                srv.DNS,
 		DefaultISettings:   wgconf.DefaultISettings(),
