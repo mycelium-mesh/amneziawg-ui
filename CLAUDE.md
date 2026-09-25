@@ -73,12 +73,13 @@ In the project root directory, run command:
 
 # Browser tests
 The frontend is one WebAssembly canvas, so the browser tests in `e2e` click by
-coordinate and assert against the REST API. They expect an instance with no
-servers configured and build state across the specs, so `make e2e` provisions
-one itself: it recreates the `awgui-test` container from an empty volume on
-port 51836 first (see `e2e/README.md`). That instance is deliberately separate
-from the stack `make run` leaves behind - the reset must never discard the
-servers you are working on. `make e2e-down` removes it.
+coordinate and assert against the REST API. They are Go tests on
+[playwright-go](https://github.com/mxschmitt/playwright-go) in their own
+module (`e2e/go.mod`). They expect an instance with no servers configured and build state across the
+tests, so `make e2e` provisions one itself: it recreates the `awgui-test`
+container from an empty volume on port 51836 first (see `e2e/README.md`).
+That instance is deliberately separate from the stack `make run` leaves
+behind - the reset must never discard the servers you are working on. `make e2e-down` removes it.
 ```sh
   make e2e
 ```
@@ -106,5 +107,5 @@ the credentials for the realm:
   playwright-cli goto "http://localhost:51836/"
 ```
 
-The Playwright suite does this properly through `httpCredentials` in
-`e2e/playwright.config.js`.
+The e2e suite does this properly through `HttpCredentials` on the browser
+context in `e2e/main_test.go`.

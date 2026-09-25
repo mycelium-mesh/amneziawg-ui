@@ -83,10 +83,10 @@ exec: ## Execute a command inside the container
 
 ##@ Browser tests
 
-# The Playwright suite drives the real WebAssembly UI and asserts against the
-# REST API. It expects an instance with no servers configured and builds state
-# across the specs (02 creates the server 03 adds a client to), so it needs a
-# clean backend on every run.
+# The playwright-go suite in e2e/ (its own Go module) drives the real
+# WebAssembly UI and asserts against the REST API. It expects an instance with
+# no servers configured and builds state across the tests (02 creates the
+# server 03 adds a client to), so it needs a clean backend on every run.
 #
 # That backend is deliberately its own container, volume and port rather than
 # the stack "make run" leaves behind: wiping the state before a test run must
@@ -96,14 +96,16 @@ E2E_NAME   ?= awgui-test
 E2E_VOLUME ?= awgui-test-data
 E2E_PORT   ?= 51836
 E2E_URL    ?= http://localhost:$(E2E_PORT)
-# base64 of the SHA-256 of "changeme" - the password the specs log in with.
+# base64 of the SHA-256 of "changeme" - the password the tests log in with.
 E2E_PASSWORD ?= BXugPWxEEEhj3HNh/kV4ll0YhzYPkKCJWILlimJI/IY=
 # How long to wait for the fresh container to answer, in seconds.
 E2E_TIMEOUT ?= 120
+# The ceiling for the whole suite, as go test -timeout takes it.
+E2E_TEST_TIMEOUT ?= 20m
 
 .PHONY: e2e
 e2e: e2e-reset ## Rebuild the test instance from an empty volume and run the browser tests
-	cd e2e && npm install --no-audit --no-fund && AWG_URL=$(E2E_URL) npx playwright test
+	cd e2e && AWG_URL=$(E2E_URL) go test -count=1 -v -timeout $(E2E_TEST_TIMEOUT) .
 
 .PHONY: e2e-reset
 e2e-reset: ## Recreate the test instance from scratch, discarding every server it holds
@@ -215,9 +217,10 @@ check-go: ## Check Go version
 	@go version | grep -q 'go1\.26' || (echo "Please use Go 1.26.X"; exit 1)
 
 .PHONY: vet
-vet: check-go ## Run go vet over both modules
+vet: check-go ## Run go vet over every module
 	go vet ./...
 	cd web-ui && GOOS=js GOARCH=wasm go vet ./...
+	cd e2e && go vet ./...
 
 .PHONY: fix
 fix: check-go ## Run go fix

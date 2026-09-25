@@ -1,5 +1,0 @@
-{
-  "name": "awgui-e2e",
-  "private": true,
-  "devDependencies": { "@playwright/test": "1.62.1" }
-}
