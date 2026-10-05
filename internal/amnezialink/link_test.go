@@ -77,3 +77,37 @@ func TestAwg31FlagsOffAreOmitted(t *testing.T) {
 		t.Fatalf("off flags leaked into link:\n%s", raw)
 	}
 }
+
+// The link follows the app's own client export: the .conf text under
+// "config" and no third-party flag, which would hide the connection settings
+// page where the user can correct the MTU the app resets on import.
+func TestLinkMatchesNativeExport(t *testing.T) {
+	srv, cl := fixture(&api.ObfuscationParams{S1: 50, S2: 60, MTU: 1280})
+
+	link, err := Build(srv, cl, "vpn.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(link, "vpn://"))
+	if strings.Contains(string(raw), "isThirdPartyConfig") {
+		t.Fatalf("link carries isThirdPartyConfig:\n%s", raw)
+	}
+
+	awg := decode(t, link)["containers"].([]any)[0].(map[string]any)["awg"].(map[string]any)
+	var last map[string]any
+	if err := json.Unmarshal([]byte(awg["last_config"].(string)), &last); err != nil {
+		t.Fatal(err)
+	}
+	if last["mtu"] != "1280" {
+		t.Errorf("mtu = %v, want 1280", last["mtu"])
+	}
+	conf, _ := last["config"].(string)
+	for _, want := range []string{"[Interface]", "MTU = 1280", "PrivateKey = CPRIV", "Endpoint = vpn.example:54844"} {
+		if !strings.Contains(conf, want) {
+			t.Errorf("config missing %q:\n%s", want, conf)
+		}
+	}
+	if strings.Contains(conf, "#") {
+		t.Errorf("config carries comments:\n%s", conf)
+	}
+}

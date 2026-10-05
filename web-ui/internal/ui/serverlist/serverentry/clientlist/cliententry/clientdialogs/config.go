@@ -26,12 +26,21 @@ import (
 // download instead. It matches the limit the previous web UI used.
 const qrCapacity = 2000
 
+// amneziaAppMTU is what the AmneziaVPN app writes over the MTU of every
+// vpn:// link it imports (ImportController::processAmneziaConfig), whatever
+// the link carries. A server on any other MTU needs the user to set it back
+// by hand in the app's connection settings.
+const amneziaAppMTU = 1376
+
 // configView is one of the representations a client config has.
 type configView struct {
 	label string
 	icon  fyne.Resource
 	text  string
 	note  string
+	// warning is shown above the text in the warning colour, for what the
+	// user has to do by hand after importing.
+	warning string
 	// qr marks the views worth rendering as a QR code. The AmneziaVPN link
 	// is not one of them: it is far too long to scan comfortably, and the
 	// app takes it from the clipboard anyway.
@@ -66,12 +75,18 @@ func presentConfig(e *env.Env, server api.Server, client api.Client, configs api
 		// header protection). The native link carries the container and
 		// protocol_version fields that make it recognise AWG 3.x, so it is
 		// the view to point Amnezia users at.
-		views = append(views, configView{
+		view := configView{
 			label: lang.L("AmneziaVPN link"),
 			icon:  theme.MailForwardIcon(),
 			text:  link,
 			note:  lang.L("Copy this link into the AmneziaVPN app - it is recognised as AmneziaWG 3.x"),
-		})
+		}
+		if server.MTU != amneziaAppMTU {
+			view.warning = lang.L("The AmneziaVPN app replaces the MTU with {{.AppMTU}} on import. "+
+				"After importing, set MTU to {{.MTU}} in the app's AmneziaWG connection settings, "+
+				"or import the .conf instead - it keeps the MTU", map[string]any{"AppMTU": amneziaAppMTU, "MTU": server.MTU})
+		}
+		views = append(views, view)
 	}
 
 	tabs := container.NewAppTabs()
@@ -120,6 +135,9 @@ func viewPage(e *env.Env, client api.Client, view configView) fyne.CanvasObject 
 
 	note := widgets.SmallText(view.note, style.Muted)
 	head := container.NewVBox(note)
+	if view.warning != "" {
+		head.Add(warningLabel(view.warning))
+	}
 
 	page := container.NewBorder(head, container.NewBorder(nil, nil, length, copyButton), nil, nil, text)
 	if !view.qr {
@@ -129,10 +147,7 @@ func viewPage(e *env.Env, client api.Client, view configView) fyne.CanvasObject 
 	png, err := encodeQR(view.text)
 	if err != nil {
 		note.Text = ""
-		warning := widget.NewLabel(err.Error())
-		warning.Wrapping = fyne.TextWrapWord
-		warning.Importance = widget.WarningImportance
-		head.Add(warning)
+		head.Add(warningLabel(err.Error()))
 		return page
 	}
 
@@ -145,6 +160,14 @@ func viewPage(e *env.Env, client api.Client, view configView) fyne.CanvasObject 
 	left := container.NewVBox(container.NewCenter(qrImage), container.NewCenter(saveQR))
 
 	return container.NewBorder(nil, nil, left, nil, page)
+}
+
+// warningLabel is a wrapped label in the warning colour.
+func warningLabel(text string) *widget.Label {
+	label := widget.NewLabel(text)
+	label.Wrapping = fyne.TextWrapWord
+	label.Importance = widget.WarningImportance
+	return label
 }
 
 // encodeQR renders the payload as a PNG, refusing anything too dense to scan.

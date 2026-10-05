@@ -128,6 +128,7 @@
   "Subnet, MTU, DNS, endpoint and the AmneziaWG 3.1 obfuscation parameters are generated automatically. Tick \"Advanced settings\" to fill them in yourself.": "Subnet, MTU, DNS, endpoint and the AmneziaWG 3.1 obfuscation parameters are generated automatically. Tick \"Advanced settings\" to fill them in yourself.",
   "Suspend": "Suspend",
   "Suspend \"{{.Name}}\"? The client loses its connection until reactivated.": "Suspend \"{{.Name}}\"? The client loses its connection until reactivated.",
+  "The AmneziaVPN app replaces the MTU with {{.AppMTU}} on import. After importing, set MTU to {{.MTU}} in the app's AmneziaWG connection settings, or import the .conf instead - it keeps the MTU": "The AmneziaVPN app replaces the MTU with {{.AppMTU}} on import. After importing, set MTU to {{.MTU}} in the app's AmneziaWG connection settings, or import the .conf instead - it keeps the MTU",
   "The placeholders are what the engine accepts, not what is wise. On top of them S1 must fit MTU-148, S2 must fit MTU-92, S1+56 must not equal S2, and H1-H4 must all differ.": "The placeholders are what the engine accepts, not what is wise. On top of them S1 must fit MTU-148, S2 must fit MTU-92, S1+56 must not equal S2, and H1-H4 must all differ.",
   "These defaults are used for new clients when \"Apply I-settings\" is enabled.": "These defaults are used for new clients when \"Apply I-settings\" is enabled.",
   "Time": "Time",
