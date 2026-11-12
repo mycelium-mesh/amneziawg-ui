@@ -137,10 +137,13 @@ func (m *Manager) CreateServer(req api.CreateServerRequest) (*api.Server, error)
 		return nil, fmt.Errorf("MTU must be between %d and %d, got %d: %w", api.MinMTU, api.MaxMTU, mtu, ErrInvalid)
 	}
 
+	// An endpoint the operator did not name must stay empty: endpointFor
+	// prefers the stored Endpoint over the stamped PublicIP, so copying the
+	// detected address in here would pin every client config to the address
+	// the host had at creation time, long after Refresh IP has moved on.
+	// PublicIP always carries what the backend detected.
+	publicIP := m.PublicIP()
 	endpoint := strings.TrimSpace(req.Endpoint)
-	if endpoint == "" {
-		endpoint = m.PublicIP()
-	}
 
 	dnsServers := parseDNS(req.DNS)
 	if len(dnsServers) == 0 {
@@ -214,7 +217,7 @@ func (m *Manager) CreateServer(req api.CreateServerRequest) (*api.Server, error)
 		Subnet:             subnet,
 		ServerIP:           serverIP,
 		MTU:                mtu,
-		PublicIP:           endpoint,
+		PublicIP:           publicIP,
 		Endpoint:           endpoint,
 		ObfuscationEnabled: enableObfuscation,
 		ObfuscationParams:  obfParams,
@@ -238,6 +241,27 @@ func (m *Manager) CreateServer(req api.CreateServerRequest) (*api.Server, error)
 	}
 
 	return &srv, nil
+}
+
+// UpdateServerEndpoint sets the endpoint a client config carries, or clears
+// it when the value is empty. Clearing is what puts a server back on the
+// auto-detected public IP: endpointFor prefers the stored Endpoint, so the
+// field must stay empty for configs to keep following the address
+// RefreshPublicIP stamps on the server.
+func (m *Manager) UpdateServerEndpoint(serverID, endpoint string) (*api.Server, error) {
+	m.mu.Lock()
+	srv := m.findServer(serverID)
+	if srv == nil {
+		m.mu.Unlock()
+		return nil, serverNotFound(serverID)
+	}
+	srv.Endpoint = strings.TrimSpace(endpoint)
+	updated := cloneServer(srv)
+	updated.Clients = nil
+	m.mu.Unlock()
+
+	m.saveOrLog("server endpoint")
+	return &updated, nil
 }
 
 // parseDNS reads the DNS field of a create request, which the form sends as

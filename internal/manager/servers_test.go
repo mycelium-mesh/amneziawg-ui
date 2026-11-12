@@ -102,6 +102,85 @@ func TestPortInUse(t *testing.T) {
 	}
 }
 
+// A server created without an explicit endpoint stays on the auto-detected
+// public IP: its Endpoint must remain empty, or endpointFor would pin every
+// client config to the address the host had at creation time. One created
+// with an endpoint keeps it, and the detected IP lands only in PublicIP -
+// never in place of the manual value.
+func TestCreateServerEndpointStaysAutoUnlessAsked(t *testing.T) {
+	m, _ := newTestManager(t)
+	m.setPublicIP("203.0.113.7")
+
+	auto, err := m.CreateServer(api.CreateServerRequest{Name: "auto", Port: 54846, Subnet: "10.0.2.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auto.PublicIP != "203.0.113.7" {
+		t.Errorf("PublicIP = %q, want the detected one", auto.PublicIP)
+	}
+	if auto.Endpoint != "" {
+		t.Errorf("Endpoint = %q, want it empty so configs follow PublicIP", auto.Endpoint)
+	}
+
+	m.setPublicIP("203.0.113.8")
+	manual, err := m.CreateServer(api.CreateServerRequest{Name: "manual", Port: 54847, Subnet: "10.0.3.0/24", Endpoint: "vpn.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manual.Endpoint != "vpn.example.com" {
+		t.Errorf("Endpoint = %q, want the requested one", manual.Endpoint)
+	}
+	if manual.PublicIP != "203.0.113.8" {
+		t.Errorf("PublicIP = %q, want the detected one, not the manual endpoint", manual.PublicIP)
+	}
+}
+
+// Setting an endpoint pins client configs to it; clearing sends them back to
+// the public IP stamped on the server, which is what RefreshPublicIP keeps
+// current. Editing the endpoint never moves PublicIP, whitespace-only input
+// counts as empty, not as a hostname, and a server nothing ever stamped
+// falls back to the manager-wide detected address.
+func TestUpdateServerEndpointSetsAndClears(t *testing.T) {
+	m, _ := newTestManager(t)
+	m.setPublicIP("203.0.113.7")
+	m.cfg.Servers[0].PublicIP = "198.51.100.2"
+
+	if _, err := m.UpdateServerEndpoint("s1", "vpn.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	srv, ok := m.Server("s1")
+	if !ok || srv.Endpoint != "vpn.example.com" {
+		t.Fatalf("Endpoint = %q, %v; want vpn.example.com", srv.Endpoint, ok)
+	}
+	if got := m.endpointFor(&srv); got != "vpn.example.com" {
+		t.Errorf("endpointFor = %q, want the manual one", got)
+	}
+
+	if _, err := m.UpdateServerEndpoint("s1", "   "); err != nil {
+		t.Fatal(err)
+	}
+	srv, _ = m.Server("s1")
+	if srv.Endpoint != "" {
+		t.Errorf("Endpoint = %q, want it cleared", srv.Endpoint)
+	}
+	if got := m.endpointFor(&srv); got != "198.51.100.2" {
+		t.Errorf("endpointFor = %q, want the stamped PublicIP", got)
+	}
+	if srv.PublicIP != "198.51.100.2" {
+		t.Errorf("PublicIP = %q, want it untouched by the endpoint edit", srv.PublicIP)
+	}
+
+	// A server whose PublicIP was never stamped: the last detected address
+	// the manager holds is the next fallback.
+	if got := m.endpointFor(&api.Server{ID: "s2"}); got != "203.0.113.7" {
+		t.Errorf("endpointFor without a stamp = %q, want the manager-wide IP", got)
+	}
+
+	if _, err := m.UpdateServerEndpoint("nope", "vpn.example.com"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown server: want ErrNotFound, got %v", err)
+	}
+}
+
 // A created server gets a .conf whose [Interface] carries the same
 // obfuscation lines its clients will, and is brought up when asked.
 func TestCreateServerWritesTheConfAndAutoStarts(t *testing.T) {

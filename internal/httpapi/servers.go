@@ -24,6 +24,21 @@ func (h *Handlers) createServer(c fiber.Ctx) error {
 	return c.JSON(srv)
 }
 
+// updateServerEndpoint sets the endpoint a client config carries; an empty
+// value clears it back to the auto-detected public IP.
+func (h *Handlers) updateServerEndpoint(c fiber.Ctx) error {
+	id := c.Params("id")
+	var req api.UpdateEndpointRequest
+	if err := decode(c, &req); err != nil {
+		return fail(c, err)
+	}
+	srv, err := h.mgr.UpdateServerEndpoint(id, req.Endpoint)
+	if err != nil {
+		return fail(c, err)
+	}
+	return c.JSON(srv)
+}
+
 func (h *Handlers) deleteServer(c fiber.Ctx) error {
 	id := c.Params("id")
 	if err := h.mgr.DeleteServer(id); err != nil {

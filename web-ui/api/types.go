@@ -133,6 +133,12 @@ type UpdateAllowedIPsRequest struct {
 	AllowedIPs string `json:"allowed_ips"`
 }
 
+// UpdateEndpointRequest is the payload to update a server's endpoint; an
+// empty value clears it back to the auto-detected public IP.
+type UpdateEndpointRequest struct {
+	Endpoint string `json:"endpoint"`
+}
+
 // UpdateISettingsRequest is the payload to update client I-settings.
 type UpdateISettingsRequest struct {
 	ApplyISettings *bool             `json:"apply_i_settings"`

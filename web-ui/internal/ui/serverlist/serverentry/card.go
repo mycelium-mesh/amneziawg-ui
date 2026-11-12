@@ -56,6 +56,15 @@ func New(e *env.Env, srv api.Server) *Card {
 		lang.L("Subnet {{.Subnet}}", map[string]any{"Subnet": srv.Subnet}),
 		lang.L("MTU {{.MTU}}", map[string]any{"MTU": srv.MTU}),
 	}
+	// The endpoint a client config carries: the one set by hand, else the
+	// public IP the backend keeps stamped on the server.
+	currentEndpoint := srv.Endpoint
+	if currentEndpoint == "" {
+		currentEndpoint = srv.PublicIP
+	}
+	if currentEndpoint != "" {
+		meta = append(meta, lang.L("Endpoint {{.Endpoint}}", map[string]any{"Endpoint": currentEndpoint}))
+	}
 	if srv.ObfuscationEnabled {
 		meta = append(meta, lang.L("Obfuscated (AWG 3.1)"))
 	}
@@ -99,6 +108,9 @@ func New(e *env.Env, srv api.Server) *Card {
 	config := widgets.NewButton(lang.L("Show config"), theme.DocumentIcon(), func() {
 		serverdialogs.ShowConfig(e, srv.ID)
 	})
+	editEndpoint := widgets.NewButton(lang.L("Edit endpoint"), theme.DocumentCreateIcon(), func() {
+		serverdialogs.ShowEndpointEditor(e, srv)
+	})
 
 	if running {
 		start.Disable()
@@ -106,7 +118,7 @@ func New(e *env.Env, srv api.Server) *Card {
 		stop.Disable()
 	}
 
-	actions := container.NewHBox(start, stop, add, config)
+	actions := container.NewHBox(start, stop, add, config, editEndpoint)
 
 	c.clients = clientlist.New(e, srv)
 

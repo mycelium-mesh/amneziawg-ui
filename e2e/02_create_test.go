@@ -50,8 +50,13 @@ func TestCreateServer(t *testing.T) {
 	if want := []string{"8.8.8.8", "1.1.1.1"}; !slices.Equal(server.DNS, want) {
 		t.Errorf("dns = %v, want %v", server.DNS, want)
 	}
-	if server.Endpoint == "" {
-		t.Error("the endpoint is empty")
+	// The endpoint stays empty on purpose: the server follows the detected
+	// public IP, which is what keeps client configs current after a change.
+	if server.Endpoint != "" {
+		t.Errorf("endpoint = %q, want it empty (the server follows PublicIP)", server.Endpoint)
+	}
+	if server.PublicIP == "" {
+		t.Error("public_ip is empty")
 	}
 	if !server.ObfuscationEnabled {
 		t.Error("obfuscation is off")

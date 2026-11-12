@@ -143,6 +143,13 @@ func (b *Client) StopServer(id string) error {
 	return b.post(apiBase+"/servers/"+id+"/stop", nil, nil)
 }
 
+// UpdateServerEndpoint sets the endpoint a client config carries; an empty
+// value clears it back to the auto-detected public IP.
+func (b *Client) UpdateServerEndpoint(serverID, endpoint string) error {
+	return b.put(apiBase+"/servers/"+serverID+"/endpoint",
+		api.UpdateEndpointRequest{Endpoint: endpoint}, nil)
+}
+
 func (b *Client) ServerInfo(id string) (api.ServerInfo, error) {
 	var out api.ServerInfo
 	return out, b.get(apiBase+"/servers/"+id+"/info", &out)

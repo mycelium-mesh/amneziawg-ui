@@ -55,3 +55,39 @@ func TestMigrationRepairsClientServerIDs(t *testing.T) {
 		t.Errorf("schema version = %d, want %d", got, SchemaVersion)
 	}
 }
+
+// An Endpoint equal to the server's PublicIP is what releases up to 3.1.9
+// wrote for every server created without an explicit endpoint: the detected
+// IP was copied into both fields, and the stored copy then won over the
+// stamped one in client configs forever. Such an endpoint is
+// indistinguishable from the auto-copy, so the migration clears it and the
+// config follows PublicIP again. A genuinely manual endpoint, and one on a
+// server whose PublicIP was never stamped, are left alone.
+func TestMigrationClearsAnEndpointEqualToThePublicIP(t *testing.T) {
+	cfg := &AppConfig{SchemaVersion: 4, Servers: []api.Server{{
+		ID: "auto", PublicIP: "198.51.100.4", Endpoint: "198.51.100.4",
+	}, {
+		ID: "manual", PublicIP: "198.51.100.4", Endpoint: "vpn.example.com",
+	}, {
+		ID: "nostamp", Endpoint: "203.0.113.9",
+	}}}
+
+	if !Migrate(cfg) {
+		t.Error("a config that needs the migration must be reported as changed")
+	}
+	if got := cfg.Servers[0].Endpoint; got != "" {
+		t.Errorf("auto-copied endpoint = %q, want it cleared", got)
+	}
+	if got := cfg.Servers[0].PublicIP; got != "198.51.100.4" {
+		t.Errorf("PublicIP = %q, want it kept", got)
+	}
+	if got := cfg.Servers[1].Endpoint; got != "vpn.example.com" {
+		t.Errorf("manual endpoint = %q, want it kept", got)
+	}
+	if got := cfg.Servers[2].Endpoint; got != "203.0.113.9" {
+		t.Errorf("endpoint without a stamped PublicIP = %q, want it kept", got)
+	}
+	if got := cfg.SchemaVersion; got != SchemaVersion {
+		t.Errorf("schema version = %d, want %d", got, SchemaVersion)
+	}
+}

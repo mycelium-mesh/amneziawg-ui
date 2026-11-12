@@ -61,6 +61,7 @@ func (h *Handlers) RegisterRoutes(app *fiber.App) {
 	// Servers
 	r.Get("/servers", h.getServers)
 	r.Post("/servers", h.createServer)
+	r.Put("/servers/:id/endpoint", h.updateServerEndpoint)
 	r.Delete("/servers/:id", h.deleteServer)
 	r.Post("/servers/:id/start", h.startServer)
 	r.Post("/servers/:id/stop", h.stopServer)

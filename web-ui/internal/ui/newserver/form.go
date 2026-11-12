@@ -549,7 +549,7 @@ func (f *Form) generated(name string, port int) api.CreateServerRequest {
 		Subnet:    f.nextFreeSubnet(),
 		MTU:       mtu,
 		DNS:       defaultDNS,
-		Endpoint:  "", // the backend fills in the detected public IP
+		Endpoint:  "", // empty keeps clients on the auto-detected public IP
 		AutoStart: &autoStart,
 		// The simple mode has no switch to offer, so it takes the shape the
 		// AmneziaWG docs recommend: one padding for all four message types.

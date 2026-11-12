@@ -128,6 +128,39 @@ func showRaw(e *env.Env, serverID string) {
 	}()
 }
 
+// ShowEndpointEditor opens the form that sets or clears a server's endpoint.
+// An empty value puts it back on the auto-detected public IP: the stored
+// Endpoint wins over the stamped PublicIP when a client config is rendered,
+// so clearing is the only way to make configs follow an address change.
+func ShowEndpointEditor(e *env.Env, srv api.Server) {
+	endpoint := widgets.NewEntry()
+	endpoint.SetText(srv.Endpoint)
+	endpoint.SetPlaceHolder(lang.L("leave empty to use the auto-detected public IP"))
+
+	content := widget.NewForm(&widget.FormItem{
+		Text:     lang.L("Endpoint"),
+		Widget:   endpoint,
+		HintText: lang.L("custom IP or hostname clients connect to"),
+	})
+
+	dialogs.ShowForm(e.Win, lang.L("Edit endpoint of {{.Name}}", map[string]any{"Name": srv.Name}),
+		lang.L("Save"), lang.L("Cancel"), content, dialogs.Size(e.Win, 560, 200), func() bool {
+			value := strings.TrimSpace(endpoint.Text)
+			if value == srv.Endpoint {
+				return true // nothing changed, nothing to send
+			}
+			go func() {
+				if err := e.Backend.UpdateServerEndpoint(srv.ID, value); err != nil {
+					e.Notify.Fail(err)
+					return
+				}
+				e.Notify.OK(lang.L("Endpoint of \"{{.Name}}\" updated", map[string]any{"Name": srv.Name}))
+				e.Reload()
+			}()
+			return true
+		})
+}
+
 func obfuscationGrid(p *api.ObfuscationParams) fyne.CanvasObject {
 	rows := [][2]string{
 		{"Jc", fmt.Sprintf("%d", p.Jc)},

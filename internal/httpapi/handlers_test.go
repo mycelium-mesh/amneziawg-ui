@@ -140,9 +140,10 @@ func TestMalformedBodyIsRejected(t *testing.T) {
 	for _, path := range []string{
 		"/api/servers/s1/clients",
 		"/api/servers/s1/clients/" + client.ID + "/allowed-ips",
+		"/api/servers/s1/endpoint",
 	} {
 		method := http.MethodPost
-		if strings.HasSuffix(path, "allowed-ips") {
+		if strings.HasSuffix(path, "allowed-ips") || strings.HasSuffix(path, "endpoint") {
 			method = http.MethodPut
 		}
 		status, body := call(t, app, method, path, "{not json")
@@ -156,6 +157,39 @@ func TestMalformedBodyIsRejected(t *testing.T) {
 		"/api/servers/s1/clients/"+client.ID+"/allowed-ips", `{}`)
 	if status != http.StatusOK {
 		t.Errorf("empty object: status = %d, want 200", status)
+	}
+}
+
+// The endpoint a client config carries is editable per server, and an empty
+// value puts it back on the detected public IP. The response is the server
+// the frontend re-renders its card from.
+func TestUpdateServerEndpoint(t *testing.T) {
+	app, m, _ := newTestAPI(t)
+
+	status, body := call(t, app, http.MethodPut, "/api/servers/s1/endpoint",
+		`{"endpoint":"vpn.example.com"}`)
+	if status != http.StatusOK {
+		t.Fatalf("set: status = %d (%s)", status, body)
+	}
+	var srv api.Server
+	if err := json.Unmarshal(body, &srv); err != nil || srv.Endpoint != "vpn.example.com" {
+		t.Errorf("payload = %s (%v), want the updated server", body, err)
+	}
+	if stored, _ := m.Server("s1"); stored.Endpoint != "vpn.example.com" {
+		t.Errorf("stored Endpoint = %q, want vpn.example.com", stored.Endpoint)
+	}
+
+	status, body = call(t, app, http.MethodPut, "/api/servers/s1/endpoint", `{"endpoint":""}`)
+	if status != http.StatusOK {
+		t.Fatalf("clear: status = %d (%s)", status, body)
+	}
+	if stored, _ := m.Server("s1"); stored.Endpoint != "" {
+		t.Errorf("stored Endpoint = %q, want it cleared", stored.Endpoint)
+	}
+
+	status, _ = call(t, app, http.MethodPut, "/api/servers/nope/endpoint", `{"endpoint":"vpn.example.com"}`)
+	if status != http.StatusNotFound {
+		t.Errorf("unknown server: status = %d, want 404", status)
 	}
 }
 
