@@ -144,6 +144,9 @@ func (m *Manager) CreateServer(req api.CreateServerRequest) (*api.Server, error)
 	// PublicIP always carries what the backend detected.
 	publicIP := m.PublicIP()
 	endpoint := strings.TrimSpace(req.Endpoint)
+	if problem := api.ValidateEndpoint(endpoint); problem != "" {
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, problem)
+	}
 
 	dnsServers := parseDNS(req.DNS)
 	if len(dnsServers) == 0 {
@@ -249,18 +252,36 @@ func (m *Manager) CreateServer(req api.CreateServerRequest) (*api.Server, error)
 // field must stay empty for configs to keep following the address
 // RefreshPublicIP stamps on the server.
 func (m *Manager) UpdateServerEndpoint(serverID, endpoint string) (*api.Server, error) {
+	endpoint = strings.TrimSpace(endpoint)
+	if problem := api.ValidateEndpoint(endpoint); problem != "" {
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, problem)
+	}
+
 	m.mu.Lock()
 	srv := m.findServer(serverID)
 	if srv == nil {
 		m.mu.Unlock()
 		return nil, serverNotFound(serverID)
 	}
-	srv.Endpoint = strings.TrimSpace(endpoint)
+	previous := srv.Endpoint
+	srv.Endpoint = endpoint
 	updated := cloneServer(srv)
 	updated.Clients = nil
 	m.mu.Unlock()
 
-	m.saveOrLog("server endpoint")
+	// A save error is reported here, not logged and swallowed: this is a
+	// change the operator asked for, and a silent failure would show
+	// "updated" in the UI while the old endpoint came back on the next
+	// restart. The in-memory value is put back as well, so the config
+	// does not claim an endpoint the disk does not have.
+	if err := m.SaveConfig(); err != nil {
+		m.mu.Lock()
+		if current := m.findServer(serverID); current != nil {
+			current.Endpoint = previous
+		}
+		m.mu.Unlock()
+		return nil, fmt.Errorf("saving the server endpoint: %w", err)
+	}
 	return &updated, nil
 }
 

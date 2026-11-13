@@ -120,3 +120,39 @@ func TestValidateISettingsSkipsEmptyEntries(t *testing.T) {
 		t.Fatalf("want one problem naming I4, got %v", problems)
 	}
 }
+
+func TestValidateEndpointAcceptsHostsRejectsInjection(t *testing.T) {
+	for _, ok := range []string{
+		"203.0.113.5", "vpn.example.com", "a.io", "x.y-z.example",
+		"xn--b1aew.xn--p1ai", "[2001:db8::1]",
+	} {
+		if problem := ValidateEndpoint(ok); problem != "" {
+			t.Errorf("ValidateEndpoint(%q) = %q, want empty", ok, problem)
+		}
+	}
+	for _, bad := range []string{
+		"vpn.example.com:51820", "203.0.113.5\n\n[Peer]",
+		"vpn.example.com PublicKey = x", "https://vpn.example.com",
+		"host name", "host_name", "-lead.example", "trail-.example",
+		"192.168.1.1:80", "2001:db8::1",
+	} {
+		if problem := ValidateEndpoint(bad); problem == "" {
+			t.Errorf("ValidateEndpoint(%q) = empty, want a problem", bad)
+		}
+	}
+}
+
+// The effective endpoint is the one the operator set, else the address the
+// backend stamped on the server - the same rule the backend renders configs
+// with, so the card cannot show a different address than the config carries.
+func TestServerEffectiveEndpoint(t *testing.T) {
+	if got := (Server{Endpoint: "vpn.example.com", PublicIP: "203.0.113.5"}).EffectiveEndpoint(); got != "vpn.example.com" {
+		t.Errorf("EffectiveEndpoint = %q, want the manual one", got)
+	}
+	if got := (Server{PublicIP: "203.0.113.5"}).EffectiveEndpoint(); got != "203.0.113.5" {
+		t.Errorf("EffectiveEndpoint = %q, want the stamped one", got)
+	}
+	if got := (Server{}).EffectiveEndpoint(); got != "" {
+		t.Errorf("EffectiveEndpoint = %q, want empty", got)
+	}
+}

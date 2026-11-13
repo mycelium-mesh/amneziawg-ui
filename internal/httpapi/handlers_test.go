@@ -193,6 +193,50 @@ func TestUpdateServerEndpoint(t *testing.T) {
 	}
 }
 
+// A request that does not name an endpoint is not a request to clear one:
+// only an explicit empty value does that. Otherwise a body-less PUT - or an
+// empty object - would silently drop an endpoint the operator set.
+func TestUpdateServerEndpointNeedsAnExplicitValue(t *testing.T) {
+	app, m, _ := newTestAPI(t)
+
+	if status, body := call(t, app, http.MethodPut, "/api/servers/s1/endpoint", `{"endpoint":"vpn.example.com"}`); status != http.StatusOK {
+		t.Fatalf("set: status = %d (%s)", status, body)
+	}
+
+	for _, body := range []string{``, `{}`} {
+		status, _ := call(t, app, http.MethodPut, "/api/servers/s1/endpoint", body)
+		if status != http.StatusBadRequest {
+			t.Errorf("body %q: status = %d, want 400", body, status)
+		}
+		if stored, _ := m.Server("s1"); stored.Endpoint != "vpn.example.com" {
+			t.Errorf("body %q: stored Endpoint = %q, want it untouched", body, stored.Endpoint)
+		}
+	}
+}
+
+// An endpoint that is not a host cannot be written: it lands in the .conf
+// and in the vpn:// link as-is, so a newline or a port inside it breaks the
+// config the client imports.
+func TestUpdateServerEndpointRejectsABrokenHost(t *testing.T) {
+	app, m, _ := newTestAPI(t)
+
+	for _, bad := range []string{
+		"h\nPostUp = x",
+		"vpn.example.com:51820",
+		"2001:db8::1",
+		"host name",
+	} {
+		status, _ := call(t, app, http.MethodPut, "/api/servers/s1/endpoint",
+			`{"endpoint":"`+bad+`"}`)
+		if status != http.StatusBadRequest {
+			t.Errorf("endpoint %q: status = %d, want 400", bad, status)
+		}
+	}
+	if stored, _ := m.Server("s1"); stored.Endpoint != "" {
+		t.Errorf("stored Endpoint = %q, want it untouched", stored.Endpoint)
+	}
+}
+
 func TestActivatingAnActiveClientIsAConflict(t *testing.T) {
 	app, m, _ := newTestAPI(t)
 	client := addClient(t, m, "alice", false)

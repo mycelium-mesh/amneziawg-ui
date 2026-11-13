@@ -59,34 +59,66 @@ func TestMigrationRepairsClientServerIDs(t *testing.T) {
 // An Endpoint equal to the server's PublicIP is what releases up to 3.1.9
 // wrote for every server created without an explicit endpoint: the detected
 // IP was copied into both fields, and the stored copy then won over the
-// stamped one in client configs forever. Such an endpoint is
-// indistinguishable from the auto-copy, so the migration clears it and the
-// config follows PublicIP again. A genuinely manual endpoint, and one on a
-// server whose PublicIP was never stamped, are left alone.
-func TestMigrationClearsAnEndpointEqualToThePublicIP(t *testing.T) {
-	cfg := &AppConfig{SchemaVersion: 4, Servers: []api.Server{{
-		ID: "auto", PublicIP: "198.51.100.4", Endpoint: "198.51.100.4",
-	}, {
-		ID: "manual", PublicIP: "198.51.100.4", Endpoint: "vpn.example.com",
-	}, {
-		ID: "nostamp", Endpoint: "203.0.113.9",
-	}}}
+// stamped one in client configs forever. Which stored endpoints are that copy
+// is decided by content: detection only ever produces an IP literal, so an
+// endpoint that is not one is the operator's and stays; one that is, is the
+// copy and is cleared - including one left frozen on an old address by a
+// Refresh IP after the host moved. A typed endpoint copied into PublicIP by
+// the same old code is moved back to Endpoint, leaving PublicIP for detection.
+func TestMigrationClearsAutoDetectedEndpoints(t *testing.T) {
+	cfg := &AppConfig{SchemaVersion: 4, Servers: []api.Server{
+		{ID: "auto", PublicIP: "198.51.100.4", Endpoint: "198.51.100.4"},
+		{ID: "refreshed", PublicIP: "198.51.100.9", Endpoint: "198.51.100.4"},
+		{ID: "manualhost", PublicIP: "vpn.example.com", Endpoint: "vpn.example.com"},
+		{ID: "manualip", PublicIP: "203.0.113.5", Endpoint: "203.0.113.5"},
+		{ID: "placeholder", PublicIP: "YOUR_SERVER_IP", Endpoint: "YOUR_SERVER_IP"},
+		{ID: "placeholderonly", PublicIP: "YOUR_SERVER_IP"},
+	}}
 
 	if !Migrate(cfg) {
 		t.Error("a config that needs the migration must be reported as changed")
 	}
-	if got := cfg.Servers[0].Endpoint; got != "" {
+	byID := map[string]api.Server{}
+	for _, srv := range cfg.Servers {
+		byID[srv.ID] = srv
+	}
+
+	if got := byID["auto"].Endpoint; got != "" {
 		t.Errorf("auto-copied endpoint = %q, want it cleared", got)
 	}
-	if got := cfg.Servers[0].PublicIP; got != "198.51.100.4" {
+	if got := byID["auto"].PublicIP; got != "198.51.100.4" {
 		t.Errorf("PublicIP = %q, want it kept", got)
 	}
-	if got := cfg.Servers[1].Endpoint; got != "vpn.example.com" {
-		t.Errorf("manual endpoint = %q, want it kept", got)
+	if got := byID["refreshed"].Endpoint; got != "" {
+		t.Errorf("frozen endpoint after Refresh IP = %q, want it cleared", got)
 	}
-	if got := cfg.Servers[2].Endpoint; got != "203.0.113.9" {
-		t.Errorf("endpoint without a stamped PublicIP = %q, want it kept", got)
+	if got := byID["refreshed"].PublicIP; got != "198.51.100.9" {
+		t.Errorf("refreshed PublicIP = %q, want it kept", got)
 	}
+	if got := byID["manualhost"].Endpoint; got != "vpn.example.com" {
+		t.Errorf("manual hostname endpoint = %q, want it kept", got)
+	}
+	if got := byID["manualhost"].PublicIP; got != "" {
+		t.Errorf("PublicIP copied from a hostname = %q, want it cleared", got)
+	}
+	if got := byID["manualip"].Endpoint; got != "" {
+		t.Errorf("manually typed IP endpoint = %q, want it cleared (indistinguishable from the copy)", got)
+	}
+	// The placeholder the app wrote when detection failed is not a host the
+	// operator chose, so it must not pin the server forever.
+	if got := byID["placeholder"].Endpoint; got != "" {
+		t.Errorf("placeholder endpoint = %q, want it cleared", got)
+	}
+	if got := byID["placeholder"].PublicIP; got != "" {
+		t.Errorf("placeholder PublicIP = %q, want it cleared", got)
+	}
+	if got := byID["placeholderonly"].PublicIP; got != "" {
+		t.Errorf("placeholder-only PublicIP = %q, want it cleared", got)
+	}
+	if got := byID["placeholderonly"].Endpoint; got != "" {
+		t.Errorf("placeholder-only endpoint = %q, want it empty", got)
+	}
+
 	if got := cfg.SchemaVersion; got != SchemaVersion {
 		t.Errorf("schema version = %d, want %d", got, SchemaVersion)
 	}

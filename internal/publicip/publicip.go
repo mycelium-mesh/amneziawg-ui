@@ -8,11 +8,13 @@ import (
 	"time"
 
 	"amneziawg-web-ui/internal/netutil"
+	"amneziawg-web-ui/web-ui/api"
 )
 
 // Unknown is what every generated config shows when nothing could tell us
-// the address; the operator sees it and sets an endpoint by hand.
-const Unknown = "YOUR_SERVER_IP"
+// the address; the operator sees it and sets an endpoint by hand. It is the
+// shared placeholder, so the config and the API cannot disagree about it.
+const Unknown = api.EndpointUnknown
 
 // Services answer a plain GET with the caller's address.
 var Services = []string{

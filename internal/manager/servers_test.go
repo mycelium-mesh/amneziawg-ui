@@ -3,6 +3,7 @@ package manager
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -178,6 +179,104 @@ func TestUpdateServerEndpointSetsAndClears(t *testing.T) {
 
 	if _, err := m.UpdateServerEndpoint("nope", "vpn.example.com"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("unknown server: want ErrNotFound, got %v", err)
+	}
+}
+
+// An endpoint that is not a host is refused: it lands in the generated .conf
+// and in the vpn:// link as it is, so a newline or a port inside it breaks
+// the config the client imports.
+func TestUpdateServerEndpointRefusesABrokenHost(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	for _, bad := range []string{
+		"h\nPostUp = x",
+		"vpn.example.com:51820",
+		"2001:db8::1",
+		"host name",
+		"https://vpn.example.com",
+	} {
+		if _, err := m.UpdateServerEndpoint("s1", bad); !errors.Is(err, ErrInvalid) {
+			t.Errorf("endpoint %q: want ErrInvalid, got %v", bad, err)
+		}
+	}
+	srv, _ := m.Server("s1")
+	if srv.Endpoint != "" {
+		t.Errorf("stored Endpoint = %q, want it untouched", srv.Endpoint)
+	}
+}
+
+// A server created with an endpoint that is not a host is refused, the same
+// way the update route refuses one: the value would land in the client .conf
+// as it is.
+func TestCreateServerRefusesABrokenEndpoint(t *testing.T) {
+	m, _ := newTestManager(t)
+	m.setPublicIP("203.0.113.7")
+
+	for _, bad := range []string{
+		"h\nPostUp = x",
+		"vpn.example.com:51820",
+		"2001:db8::1",
+		"host name",
+	} {
+		_, err := m.CreateServer(api.CreateServerRequest{
+			Name: "bad", Port: 54846, Subnet: "10.0.2.0/24", Endpoint: bad,
+		})
+		if !errors.Is(err, ErrInvalid) {
+			t.Errorf("endpoint %q: want ErrInvalid, got %v", bad, err)
+		}
+	}
+}
+
+// A change the operator asked for is not reported as done when it did not
+// reach the disk: the error goes to the caller and the in-memory config is
+// put back, so the UI and the config agree about what is stored.
+func TestUpdateServerEndpointReportsAFailedSave(t *testing.T) {
+	m, _ := newTestManager(t)
+	if _, err := m.UpdateServerEndpoint("s1", "vpn.example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Taking the config file's directory away makes the write fail.
+	if err := os.RemoveAll(filepath.Dir(m.settings.ConfigFile)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := m.UpdateServerEndpoint("s1", "other.example.com"); err == nil {
+		t.Fatal("a failed save must be reported")
+	}
+	srv, _ := m.Server("s1")
+	if srv.Endpoint != "vpn.example.com" {
+		t.Errorf("stored Endpoint = %q, want the value from before the failed save", srv.Endpoint)
+	}
+}
+
+// A boot under a changed address has to reach the servers, not only the
+// manager: endpointFor reads the server's own copy first, so a server left
+// holding the address the host had at some earlier boot keeps handing that
+// address to its clients.
+func TestSetPublicIPStampsEveryServer(t *testing.T) {
+	m, _ := newTestManager(t)
+	m.cfg.Servers[0].PublicIP = "198.51.100.4"
+
+	m.setPublicIP("198.51.100.9")
+
+	srv, _ := m.Server("s1")
+	if srv.PublicIP != "198.51.100.9" {
+		t.Errorf("PublicIP = %q, want the freshly detected one", srv.PublicIP)
+	}
+	if got := m.endpointFor(&srv); got != "198.51.100.9" {
+		t.Errorf("endpointFor = %q, want the fresh address", got)
+	}
+}
+
+// With no address anywhere, the config says so in words instead of rendering
+// a host-less "Endpoint = :54844".
+func TestEndpointForWithoutAnyAddress(t *testing.T) {
+	m, _ := newTestManager(t)
+	m.publicIP = ""
+
+	if got := m.endpointFor(&api.Server{ID: "s2"}); got != api.EndpointUnknown {
+		t.Errorf("endpointFor = %q, want the placeholder", got)
 	}
 }
 

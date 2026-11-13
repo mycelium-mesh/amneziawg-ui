@@ -70,3 +70,17 @@ No Node.js is needed: on the first run `TestMain` downloads the Playwright
 driver (with its own Node) into `~/.cache/ms-playwright-go`. Browsers are not
 downloaded - the tests reuse the Chrome installed on the machine
 (`Channel: "chrome"`); it needs WebGL, which the app requires.
+
+A machine without that Chrome can point the suite at another build instead:
+
+```sh
+AWG_E2E_BROWSER=chromium \
+AWG_E2E_BROWSER_PATH=$HOME/.cache/ms-playwright/chromium_headless_shell-1223/chrome-headless-shell-linux64/chrome-headless-shell \
+  go test -count=1 -v .
+```
+
+`AWG_E2E_BROWSER` picks the browser - `chrome` (the default, the machine's own)
+or `chromium` - and `AWG_E2E_BROWSER_PATH` names a binary to launch. Without a
+path, `chromium` means the copy Playwright would have downloaded, which the
+driver never fetches here (`SkipInstallBrowsers`), so point the path at a
+build that is on disk.

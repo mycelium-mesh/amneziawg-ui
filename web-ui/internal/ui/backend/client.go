@@ -147,7 +147,7 @@ func (b *Client) StopServer(id string) error {
 // value clears it back to the auto-detected public IP.
 func (b *Client) UpdateServerEndpoint(serverID, endpoint string) error {
 	return b.put(apiBase+"/servers/"+serverID+"/endpoint",
-		api.UpdateEndpointRequest{Endpoint: endpoint}, nil)
+		api.UpdateEndpointRequest{Endpoint: &endpoint}, nil)
 }
 
 func (b *Client) ServerInfo(id string) (api.ServerInfo, error) {

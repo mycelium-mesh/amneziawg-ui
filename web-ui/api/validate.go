@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/hex"
 	"fmt"
+	"net"
 	"regexp"
 	"strconv"
 	"strings"
@@ -266,6 +267,59 @@ func checkCountTag(name string, fields []string) string {
 	}
 	if count < 0 || count > MaxCPSCount {
 		return fmt.Sprintf("<%s %d> must be in [0, %d]", name, count, MaxCPSCount)
+	}
+	return ""
+}
+
+// hostnameLabel is one valid DNS label: letters, digits and hyphens, no
+// leading or trailing hyphen. The engine accepts hostnames in the Endpoint
+// (wg(8) resolves them once at setup), so they travel through the same rule.
+var hostnameLabel = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$`)
+
+// ValidateEndpoint reports what is wrong with a server endpoint, or "" when
+// the value is usable.
+//
+// The endpoint is written straight into a generated client .conf as
+// "Endpoint = <value>:<port>" and echoed as the JSON "hostName" of a vpn://
+// link, so it must be a bare host and nothing else: an IP literal (v4, or v6
+// in brackets), or a hostname. Anything that could add a line to the .conf
+// - a space, a colon on a non-bracketed host, a newline, a control byte - is
+// rejected here, once, for both sides of the app: the create form, the
+// server-card editor, and the API, which all used to take the value raw.
+//
+// The messages are fixed strings, so both sides can translate them.
+func ValidateEndpoint(endpoint string) string {
+	if endpoint == "" {
+		return "" // empty means "use the detected public IP"
+	}
+	if strings.ContainsAny(endpoint, " \t\r\n") {
+		return "Endpoint must be an IP address or a hostname, with no spaces"
+	}
+	if strings.HasPrefix(endpoint, "[") || strings.HasSuffix(endpoint, "]") {
+		// Brackets come in pairs: half of them would put a stray
+		// bracket into the config, where it reads as part of the host.
+		if !strings.HasPrefix(endpoint, "[") || !strings.HasSuffix(endpoint, "]") || len(endpoint) < 3 {
+			return "Endpoint must be an IP address or a hostname"
+		}
+		if ip := net.ParseIP(endpoint[1 : len(endpoint)-1]); ip != nil {
+			return ""
+		}
+		return "Endpoint must be an IP address or a hostname"
+	}
+	if ip := net.ParseIP(endpoint); ip != nil {
+		if ip.To4() == nil {
+			// An IPv6 address has to be bracketed: the config writes
+			// "Endpoint = <value>:<port>", and an unbracketed v6 address
+			// would end in a second colon that reads as the port.
+			return "An IPv6 address must be in brackets, e.g. [2001:db8::1]"
+		}
+		return ""
+	}
+	// A bare hostname: DNS labels joined by dots, no port, no scheme.
+	for _, label := range strings.Split(endpoint, ".") {
+		if !hostnameLabel.MatchString(label) {
+			return "Endpoint must be an IP address or a hostname"
+		}
 	}
 	return ""
 }

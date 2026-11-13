@@ -57,14 +57,14 @@ func New(e *env.Env, srv api.Server) *Card {
 		lang.L("MTU {{.MTU}}", map[string]any{"MTU": srv.MTU}),
 	}
 	// The endpoint a client config carries: the one set by hand, else the
-	// public IP the backend keeps stamped on the server.
-	currentEndpoint := srv.Endpoint
+	// public IP the backend keeps stamped on the server. The rule is the
+	// shared one, so the card cannot show an address the config does not
+	// use.
+	currentEndpoint := srv.EffectiveEndpoint()
 	if currentEndpoint == "" {
-		currentEndpoint = srv.PublicIP
+		currentEndpoint = api.EndpointUnknown
 	}
-	if currentEndpoint != "" {
-		meta = append(meta, lang.L("Endpoint {{.Endpoint}}", map[string]any{"Endpoint": currentEndpoint}))
-	}
+	meta = append(meta, lang.L("Endpoint {{.Endpoint}}", map[string]any{"Endpoint": currentEndpoint}))
 	if srv.ObfuscationEnabled {
 		meta = append(meta, lang.L("Obfuscated (AWG 3.1)"))
 	}

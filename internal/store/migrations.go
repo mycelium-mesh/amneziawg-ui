@@ -1,5 +1,11 @@
 package store
 
+import (
+	"net/netip"
+
+	"amneziawg-web-ui/web-ui/api"
+)
+
 // This file holds the one-shot migrations that bring a config written by an
 // older release - web_config.json and the .conf files it points at - up to
 // what the current code expects. They run at startup, from manager.New,
@@ -20,8 +26,8 @@ package store
 //	    the client ID.
 //	4 - every client's ServerID actually names the server it lives in; see
 //	    repairClientServerIDs.
-//	5 - an Endpoint equal to the server's PublicIP is the auto-detected one
-//	    old releases copied in at creation; see clearAutoEndpoints.
+//	5 - an Endpoint holding an IP literal is the auto-detected address old
+//	    releases copied in at creation; see clearAutoEndpoints.
 //
 // It starts at 3 rather than 1 because pre-release builds already stamped 1
 // and 2 into deployed configs. Numbering the first release below what is
@@ -76,19 +82,24 @@ func repairClientServerIDs(cfg *AppConfig) {
 
 const schemaAutoEndpoint = 5
 
-// clearAutoEndpoints clears the endpoint releases up to 3.1.9 copied the
-// detected public IP into.
+// clearAutoEndpoints clears the endpoints releases up to 3.1.9 copied into
+// the fields from a detected or typed address.
 //
-// CreateServer used to write the detected address into both PublicIP and
-// Endpoint of every server created without an explicit endpoint. endpointFor
-// prefers the stored Endpoint when a client config is rendered, so a server
-// whose address later changed kept handing out the stale one even after
-// "Refresh IP". An Endpoint equal to the server's PublicIP is
-// indistinguishable from that auto-copy, so it is cleared: the config then
-// follows PublicIP again, which RefreshPublicIP keeps current. An endpoint
-// the operator typed by hand can only equal the detected address by
-// coincidence - and there the server is put back on the behaviour it was
-// already effectively following.
+// CreateServer wrote the endpoint into both PublicIP and Endpoint of every
+// server created without an explicit one - and the endpoint it wrote was the
+// detected address when the field was left empty, or the typed hostname when
+// it was not. endpointFor prefers the stored Endpoint, so a server whose
+// address later changed kept handing out the stale one even after "Refresh
+// IP".
+//
+// Which stored endpoints are that copy is decided by content, not by the two
+// fields being equal: equality misses a server refreshed after creation
+// (PublicIP moved on, the frozen Endpoint stayed) and destroys a hostname the
+// operator typed. So an Endpoint holding an IP literal is the copy - detection
+// can only produce an address - and is dropped, while a hostname in Endpoint
+// is the operator's and stays. A hostname that ended up in PublicIP (the old
+// code copied the endpoint there too, and a typed one can be a hostname) is
+// moved back to Endpoint, leaving PublicIP empty for the next detection.
 func clearAutoEndpoints(cfg *AppConfig) {
 	if cfg.SchemaVersion >= schemaAutoEndpoint {
 		return
@@ -96,8 +107,45 @@ func clearAutoEndpoints(cfg *AppConfig) {
 
 	for i := range cfg.Servers {
 		srv := &cfg.Servers[i]
-		if srv.Endpoint != "" && srv.PublicIP != "" && srv.Endpoint == srv.PublicIP {
+
+		switch {
+		case srv.Endpoint == api.EndpointUnknown:
+			// The placeholder the app itself wrote when detection failed:
+			// not a host the operator chose, so it goes and the server
+			// follows the detected address again.
+			srv.Endpoint = ""
+		case isIPLiteral(srv.Endpoint):
+			// An address in Endpoint is what detection produced - it can
+			// produce nothing else - so it is the copy, and it is dropped.
+			// That also frees a server left frozen on an old address by a
+			// Refresh IP after the host moved.
 			srv.Endpoint = ""
 		}
+
+		switch {
+		case srv.PublicIP == "":
+		case srv.PublicIP == api.EndpointUnknown:
+			// The placeholder again: nothing was ever detected, so
+			// there is nothing to keep.
+			srv.PublicIP = ""
+		case isIPLiteral(srv.PublicIP):
+			// A detected address: it stays, and the next detection
+			// refreshes it.
+		default:
+			// The old code copied the endpoint into PublicIP too, so a
+			// hostname can be sitting there with the operator's host
+			// nowhere else. Put it back where it belongs; leave PublicIP
+			// empty for detection to fill.
+			if srv.Endpoint == "" {
+				srv.Endpoint = srv.PublicIP
+			}
+			srv.PublicIP = ""
+		}
 	}
+}
+
+// isIPLiteral reports whether s is an IPv4 or IPv6 address.
+func isIPLiteral(s string) bool {
+	_, err := netip.ParseAddr(s)
+	return err == nil
 }

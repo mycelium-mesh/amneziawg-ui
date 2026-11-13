@@ -3,6 +3,7 @@
 package serverdialogs
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -148,6 +149,13 @@ func ShowEndpointEditor(e *env.Env, srv api.Server) {
 			value := strings.TrimSpace(endpoint.Text)
 			if value == srv.Endpoint {
 				return true // nothing changed, nothing to send
+			}
+			// The endpoint lands in a generated client .conf, so the
+			// shared rule checks it before the request, like the create
+			// form and the server-side create do.
+			if problem := api.ValidateEndpoint(value); problem != "" {
+				e.Notify.Fail(errors.New(lang.L(problem)))
+				return false
 			}
 			go func() {
 				if err := e.Backend.UpdateServerEndpoint(srv.ID, value); err != nil {

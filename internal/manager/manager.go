@@ -70,6 +70,10 @@ func New(settings config.Settings, st *store.Store, tools *awg.Tools) *Manager {
 // scheduled-suspension checker. It returns once the servers are up; the
 // checker keeps running in the background for the life of the process.
 func (m *Manager) Start() {
+	// Servers carry their own copy of the address (endpointFor reads it there
+	// first), so a restart under a changed IP has to restamp them as well -
+	// otherwise every config keeps pointing at the address the host had at
+	// some earlier boot until someone presses Refresh IP.
 	m.setPublicIP(publicip.Detect(m.tools.RouteSourceIP))
 
 	if m.settings.AutoStart {

@@ -5,6 +5,7 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 
+	"amneziawg-web-ui/internal/manager"
 	"amneziawg-web-ui/web-ui/api"
 )
 
@@ -32,7 +33,10 @@ func (h *Handlers) updateServerEndpoint(c fiber.Ctx) error {
 	if err := decode(c, &req); err != nil {
 		return fail(c, err)
 	}
-	srv, err := h.mgr.UpdateServerEndpoint(id, req.Endpoint)
+	if req.Endpoint == nil {
+		return fail(c, fmt.Errorf("%w: endpoint is required, or \"\" to clear it", manager.ErrInvalid))
+	}
+	srv, err := h.mgr.UpdateServerEndpoint(id, *req.Endpoint)
 	if err != nil {
 		return fail(c, err)
 	}

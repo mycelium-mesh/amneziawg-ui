@@ -533,6 +533,12 @@ func (f *Form) build() (api.CreateServerRequest, []string) {
 		req.ObfuscationParams = params
 	}
 
+	// The endpoint goes straight into a generated client .conf, so the
+	// shared rule checks it here too, exactly like the server-side create.
+	if problem := api.ValidateEndpoint(req.Endpoint); problem != "" {
+		problems = append(problems, lang.L(problem))
+	}
+
 	return req, problems
 }
 
