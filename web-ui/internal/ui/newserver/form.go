@@ -533,6 +533,12 @@ func (f *Form) build() (api.CreateServerRequest, []string) {
 		req.ObfuscationParams = params
 	}
 
+	// The endpoint goes straight into a generated client .conf, so the
+	// shared rule checks it here too, exactly like the server-side create.
+	if problem := api.ValidateEndpoint(req.Endpoint); problem != "" {
+		problems = append(problems, lang.L(problem))
+	}
+
 	return req, problems
 }
 
@@ -549,7 +555,7 @@ func (f *Form) generated(name string, port int) api.CreateServerRequest {
 		Subnet:    f.nextFreeSubnet(),
 		MTU:       mtu,
 		DNS:       defaultDNS,
-		Endpoint:  "", // the backend fills in the detected public IP
+		Endpoint:  "", // empty keeps clients on the auto-detected public IP
 		AutoStart: &autoStart,
 		// The simple mode has no switch to offer, so it takes the shape the
 		// AmneziaWG docs recommend: one padding for all four message types.

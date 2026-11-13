@@ -140,9 +140,10 @@ func TestMalformedBodyIsRejected(t *testing.T) {
 	for _, path := range []string{
 		"/api/servers/s1/clients",
 		"/api/servers/s1/clients/" + client.ID + "/allowed-ips",
+		"/api/servers/s1/endpoint",
 	} {
 		method := http.MethodPost
-		if strings.HasSuffix(path, "allowed-ips") {
+		if strings.HasSuffix(path, "allowed-ips") || strings.HasSuffix(path, "endpoint") {
 			method = http.MethodPut
 		}
 		status, body := call(t, app, method, path, "{not json")
@@ -156,6 +157,83 @@ func TestMalformedBodyIsRejected(t *testing.T) {
 		"/api/servers/s1/clients/"+client.ID+"/allowed-ips", `{}`)
 	if status != http.StatusOK {
 		t.Errorf("empty object: status = %d, want 200", status)
+	}
+}
+
+// The endpoint a client config carries is editable per server, and an empty
+// value puts it back on the detected public IP. The response is the server
+// the frontend re-renders its card from.
+func TestUpdateServerEndpoint(t *testing.T) {
+	app, m, _ := newTestAPI(t)
+
+	status, body := call(t, app, http.MethodPut, "/api/servers/s1/endpoint",
+		`{"endpoint":"vpn.example.com"}`)
+	if status != http.StatusOK {
+		t.Fatalf("set: status = %d (%s)", status, body)
+	}
+	var srv api.Server
+	if err := json.Unmarshal(body, &srv); err != nil || srv.Endpoint != "vpn.example.com" {
+		t.Errorf("payload = %s (%v), want the updated server", body, err)
+	}
+	if stored, _ := m.Server("s1"); stored.Endpoint != "vpn.example.com" {
+		t.Errorf("stored Endpoint = %q, want vpn.example.com", stored.Endpoint)
+	}
+
+	status, body = call(t, app, http.MethodPut, "/api/servers/s1/endpoint", `{"endpoint":""}`)
+	if status != http.StatusOK {
+		t.Fatalf("clear: status = %d (%s)", status, body)
+	}
+	if stored, _ := m.Server("s1"); stored.Endpoint != "" {
+		t.Errorf("stored Endpoint = %q, want it cleared", stored.Endpoint)
+	}
+
+	status, _ = call(t, app, http.MethodPut, "/api/servers/nope/endpoint", `{"endpoint":"vpn.example.com"}`)
+	if status != http.StatusNotFound {
+		t.Errorf("unknown server: status = %d, want 404", status)
+	}
+}
+
+// A request that does not name an endpoint is not a request to clear one:
+// only an explicit empty value does that. Otherwise a body-less PUT - or an
+// empty object - would silently drop an endpoint the operator set.
+func TestUpdateServerEndpointNeedsAnExplicitValue(t *testing.T) {
+	app, m, _ := newTestAPI(t)
+
+	if status, body := call(t, app, http.MethodPut, "/api/servers/s1/endpoint", `{"endpoint":"vpn.example.com"}`); status != http.StatusOK {
+		t.Fatalf("set: status = %d (%s)", status, body)
+	}
+
+	for _, body := range []string{``, `{}`} {
+		status, _ := call(t, app, http.MethodPut, "/api/servers/s1/endpoint", body)
+		if status != http.StatusBadRequest {
+			t.Errorf("body %q: status = %d, want 400", body, status)
+		}
+		if stored, _ := m.Server("s1"); stored.Endpoint != "vpn.example.com" {
+			t.Errorf("body %q: stored Endpoint = %q, want it untouched", body, stored.Endpoint)
+		}
+	}
+}
+
+// An endpoint that is not a host cannot be written: it lands in the .conf
+// and in the vpn:// link as-is, so a newline or a port inside it breaks the
+// config the client imports.
+func TestUpdateServerEndpointRejectsABrokenHost(t *testing.T) {
+	app, m, _ := newTestAPI(t)
+
+	for _, bad := range []string{
+		"h\nPostUp = x",
+		"vpn.example.com:51820",
+		"2001:db8::1",
+		"host name",
+	} {
+		status, _ := call(t, app, http.MethodPut, "/api/servers/s1/endpoint",
+			`{"endpoint":"`+bad+`"}`)
+		if status != http.StatusBadRequest {
+			t.Errorf("endpoint %q: status = %d, want 400", bad, status)
+		}
+	}
+	if stored, _ := m.Server("s1"); stored.Endpoint != "" {
+		t.Errorf("stored Endpoint = %q, want it untouched", stored.Endpoint)
 	}
 }
 

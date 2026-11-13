@@ -59,10 +59,26 @@ func run(m *testing.M) int {
 	}
 	defer pw.Stop()
 
-	browser, err = pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Channel: new("chrome"),
-		Args:    []string{"--enable-unsafe-swiftshader"},
-	})
+	// The browser: the machine's own Chrome by default, as the comment
+	// above says, or the copy Playwright downloaded when AWG_E2E_BROWSER
+	// names it - a machine without Chrome installed still needs to be able
+	// to run the suite.
+	launch := playwright.BrowserTypeLaunchOptions{
+		Args: []string{"--enable-unsafe-swiftshader"},
+	}
+	if browser := cmp.Or(os.Getenv("AWG_E2E_BROWSER"), "chrome"); browser != "chromium" {
+		launch.Channel = new(browser)
+	} else if path := os.Getenv("AWG_E2E_BROWSER_PATH"); path != "" {
+		// A browser that is on disk but that the driver does not know
+		// about - an older Playwright download, or a system Chromium -
+		// named directly.
+		launch.ExecutablePath = new(path)
+	}
+	if os.Getenv("AWG_E2E_BROWSER") == "chromium" && os.Getenv("AWG_E2E_BROWSER_PATH") == "" {
+		fmt.Fprintln(os.Stderr, "using playwright's own chromium; the driver never downloads it here - "+
+			"point AWG_E2E_BROWSER_PATH at a browser that is on disk")
+	}
+	browser, err = pw.Chromium.Launch(launch)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "launch chrome:", err)
 		return 1

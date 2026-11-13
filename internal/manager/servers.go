@@ -137,9 +137,15 @@ func (m *Manager) CreateServer(req api.CreateServerRequest) (*api.Server, error)
 		return nil, fmt.Errorf("MTU must be between %d and %d, got %d: %w", api.MinMTU, api.MaxMTU, mtu, ErrInvalid)
 	}
 
+	// An endpoint the operator did not name must stay empty: endpointFor
+	// prefers the stored Endpoint over the stamped PublicIP, so copying the
+	// detected address in here would pin every client config to the address
+	// the host had at creation time, long after Refresh IP has moved on.
+	// PublicIP always carries what the backend detected.
+	publicIP := m.PublicIP()
 	endpoint := strings.TrimSpace(req.Endpoint)
-	if endpoint == "" {
-		endpoint = m.PublicIP()
+	if problem := api.ValidateEndpoint(endpoint); problem != "" {
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, problem)
 	}
 
 	dnsServers := parseDNS(req.DNS)
@@ -214,7 +220,7 @@ func (m *Manager) CreateServer(req api.CreateServerRequest) (*api.Server, error)
 		Subnet:             subnet,
 		ServerIP:           serverIP,
 		MTU:                mtu,
-		PublicIP:           endpoint,
+		PublicIP:           publicIP,
 		Endpoint:           endpoint,
 		ObfuscationEnabled: enableObfuscation,
 		ObfuscationParams:  obfParams,
@@ -238,6 +244,45 @@ func (m *Manager) CreateServer(req api.CreateServerRequest) (*api.Server, error)
 	}
 
 	return &srv, nil
+}
+
+// UpdateServerEndpoint sets the endpoint a client config carries, or clears
+// it when the value is empty. Clearing is what puts a server back on the
+// auto-detected public IP: endpointFor prefers the stored Endpoint, so the
+// field must stay empty for configs to keep following the address
+// RefreshPublicIP stamps on the server.
+func (m *Manager) UpdateServerEndpoint(serverID, endpoint string) (*api.Server, error) {
+	endpoint = strings.TrimSpace(endpoint)
+	if problem := api.ValidateEndpoint(endpoint); problem != "" {
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, problem)
+	}
+
+	m.mu.Lock()
+	srv := m.findServer(serverID)
+	if srv == nil {
+		m.mu.Unlock()
+		return nil, serverNotFound(serverID)
+	}
+	previous := srv.Endpoint
+	srv.Endpoint = endpoint
+	updated := cloneServer(srv)
+	updated.Clients = nil
+	m.mu.Unlock()
+
+	// A save error is reported here, not logged and swallowed: this is a
+	// change the operator asked for, and a silent failure would show
+	// "updated" in the UI while the old endpoint came back on the next
+	// restart. The in-memory value is put back as well, so the config
+	// does not claim an endpoint the disk does not have.
+	if err := m.SaveConfig(); err != nil {
+		m.mu.Lock()
+		if current := m.findServer(serverID); current != nil {
+			current.Endpoint = previous
+		}
+		m.mu.Unlock()
+		return nil, fmt.Errorf("saving the server endpoint: %w", err)
+	}
+	return &updated, nil
 }
 
 // parseDNS reads the DNS field of a create request, which the form sends as

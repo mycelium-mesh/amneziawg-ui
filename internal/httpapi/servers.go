@@ -5,6 +5,7 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 
+	"amneziawg-web-ui/internal/manager"
 	"amneziawg-web-ui/web-ui/api"
 )
 
@@ -18,6 +19,24 @@ func (h *Handlers) createServer(c fiber.Ctx) error {
 		return fail(c, err)
 	}
 	srv, err := h.mgr.CreateServer(req)
+	if err != nil {
+		return fail(c, err)
+	}
+	return c.JSON(srv)
+}
+
+// updateServerEndpoint sets the endpoint a client config carries; an empty
+// value clears it back to the auto-detected public IP.
+func (h *Handlers) updateServerEndpoint(c fiber.Ctx) error {
+	id := c.Params("id")
+	var req api.UpdateEndpointRequest
+	if err := decode(c, &req); err != nil {
+		return fail(c, err)
+	}
+	if req.Endpoint == nil {
+		return fail(c, fmt.Errorf("%w: endpoint is required, or \"\" to clear it", manager.ErrInvalid))
+	}
+	srv, err := h.mgr.UpdateServerEndpoint(id, *req.Endpoint)
 	if err != nil {
 		return fail(c, err)
 	}

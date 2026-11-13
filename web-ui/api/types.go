@@ -87,6 +87,26 @@ type Server struct {
 	CreatedAt          float64            `json:"created_at"`
 }
 
+// EndpointUnknown is what a generated config shows when no address could be
+// detected: a placeholder the operator sees and replaces, rather than an
+// empty host that would render as "Endpoint = :54844".
+const EndpointUnknown = "YOUR_SERVER_IP"
+
+// EffectiveEndpoint is the host a client config of this server points at:
+// the endpoint the operator set by hand, else the public IP the backend
+// stamped on the server.
+//
+// The rule lives here so both sides apply the same one: the backend renders
+// the config with it, the server card shows it. The backend has one more
+// step - the address it detected last, for a server that carries no stamp at
+// all - and the placeholder for a server that has neither.
+func (s Server) EffectiveEndpoint() string {
+	if s.Endpoint != "" {
+		return s.Endpoint
+	}
+	return s.PublicIP
+}
+
 // Client holds a WireGuard client configuration.
 type Client struct {
 	ID                 string             `json:"id"`
@@ -131,6 +151,15 @@ type AddClientRequest struct {
 // UpdateAllowedIPsRequest is the payload to update client AllowedIPs.
 type UpdateAllowedIPsRequest struct {
 	AllowedIPs string `json:"allowed_ips"`
+}
+
+// UpdateEndpointRequest is the payload to update a server's endpoint; an
+// empty value clears it back to the auto-detected public IP. The pointer
+// separates "no endpoint in the body at all" - a malformed request, and
+// nothing to do - from a deliberate clearing, so a body-less PUT or an empty
+// object cannot silently drop an endpoint the operator set.
+type UpdateEndpointRequest struct {
+	Endpoint *string `json:"endpoint"`
 }
 
 // UpdateISettingsRequest is the payload to update client I-settings.

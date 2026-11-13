@@ -6,3 +6,4 @@ Makefile.nerdctl
 /web-ui/wasm/
 /profiles/
 /article/
+/.graymatter/
