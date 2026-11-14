@@ -106,6 +106,13 @@ func (m *Manager) ServerConfig(id string) (api.ServerConfig, error) {
 
 // CreateServer creates a new WireGuard server configuration.
 func (m *Manager) CreateServer(req api.CreateServerRequest) (*api.Server, error) {
+	// The name lands in the archive's file name, so it is checked as it was
+	// typed, before the cleaning below reshapes it: a name a desktop would
+	// refuse is turned down here rather than reshaped on the way out.
+	if problem := api.ValidateName(req.Name); problem != "" {
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, problem)
+	}
+
 	name := wgconf.SanitizeName(req.Name, "New Server")
 	port := req.Port
 	if port == 0 {

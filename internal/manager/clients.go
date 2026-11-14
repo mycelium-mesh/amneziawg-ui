@@ -2,12 +2,14 @@ package manager
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"amneziawg-web-ui/internal/amnezialink"
 	"amneziawg-web-ui/internal/awg"
+	"amneziawg-web-ui/internal/filename"
 	"amneziawg-web-ui/internal/netutil"
 	"amneziawg-web-ui/internal/wgconf"
 	"amneziawg-web-ui/web-ui/api"
@@ -56,6 +58,73 @@ func (m *Manager) ClientConfig(serverID, clientID string, includeComments bool) 
 	return wgconf.ClientConf(&srv, &client, m.endpointFor(&srv), includeComments), nil
 }
 
+// ClientConfigFile is one rendered client .conf: the name it goes by inside
+// an archive and the content that goes with it.
+type ClientConfigFile struct {
+	Name    string
+	Content string
+}
+
+// ClientConfigs renders the .conf of every client of one server, suspended
+// ones included: a suspended client's config is still valid, it only stops
+// being served until the client is activated again.
+//
+// The whole set comes out of one snapshot of the server, so the configs in
+// an archive agree with each other, and each of them is rendered by the same
+// wgconf.ClientConf a single-client download uses, so the two cannot drift
+// apart.
+func (m *Manager) ClientConfigs(serverID string) ([]ClientConfigFile, error) {
+	srv, ok := m.serverSnapshot(serverID)
+	if !ok {
+		return nil, serverNotFound(serverID)
+	}
+
+	endpoint := m.endpointFor(&srv)
+
+	files := make([]ClientConfigFile, 0, len(srv.Clients))
+	taken := make(map[string]bool, len(srv.Clients))
+	for i := range srv.Clients {
+		client := &srv.Clients[i]
+		files = append(files, ClientConfigFile{
+			Name:    clientConfigFileName(*client, taken),
+			Content: wgconf.ClientConf(&srv, client, endpoint, true),
+		})
+	}
+	return files, nil
+}
+
+// clientConfigFileName is the name one client's .conf goes by inside the
+// archive. Two clients may share a name, so the second one carries the
+// client's ID, which is unique.
+//
+// The names already taken are counted in lower case: macOS and Windows
+// treat a file name case-insensitively, so "Alice.conf" and "alice.conf"
+// are one file there, and whoever unpacks the archive would lose one of the
+// two configs.
+func clientConfigFileName(client api.Client, taken map[string]bool) string {
+	base := archiveEntryBase(client.Name)
+
+	name := base + ".conf"
+	if taken[strings.ToLower(name)] {
+		name = fmt.Sprintf("%s_%s.conf", base, client.ID)
+		for n := 2; taken[strings.ToLower(name)]; n++ {
+			name = fmt.Sprintf("%s_%s_%d.conf", base, client.ID, n)
+		}
+	}
+	taken[strings.ToLower(name)] = true
+	return name
+}
+
+// archiveEntryBase is the file name a client's .conf is built from. The
+// name is sanitised on the way in, but an archive is unpacked by tools that
+// take its paths literally: a client named "a/b" would write outside the
+// directory it is unpacked into, and a name carrying a character Windows
+// refuses would not extract there at all. The file name rule is the shared
+// one, so the archive works on every desktop it is unpacked on.
+func archiveEntryBase(name string) string {
+	return filename.Safe(wgconf.SanitizeName(name, "client"), "client")
+}
+
 // ClientLink renders the vpn:// link for a client.
 func (m *Manager) ClientLink(serverID, clientID string) (string, error) {
 	srv, client, err := m.serverAndClient(serverID, clientID)
@@ -91,6 +160,14 @@ func (m *Manager) clientConfigOf(serverID string, client *api.Client) string {
 // AddClient adds a WireGuard peer to a server and returns the client with
 // its rendered config.
 func (m *Manager) AddClient(serverID string, req api.AddClientRequest) (*api.Client, string, error) {
+	// The name lands in a file name - the archive's entry, the name of the
+	// single download - so it is checked as it was typed, before the
+	// cleaning below reshapes it: a name a desktop would refuse is turned
+	// down here rather than reshaped on the way out.
+	if problem := api.ValidateName(req.Name); problem != "" {
+		return nil, "", fmt.Errorf("%w: %s", ErrInvalid, problem)
+	}
+
 	// The name lands in a .conf comment, in the peer marker and in a
 	// Content-Disposition filename, so it is cleaned before anything stores
 	// it - not at each of those points.

@@ -92,6 +92,30 @@ func TestCreateServerRejectsAMalformedSubnet(t *testing.T) {
 	}
 }
 
+// A server name lands in the archive's file name, so a name that cannot be
+// a file name on the desktops people unpack an archive on is refused at the
+// input: the file would not carry the name the user gave it.
+func TestCreateServerRefusesANameThatCannotBeAFileName(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	for _, bad := range []string{
+		"a<b", "a>b", "a:b", `a"b`, "a|b", "a?b", "a*b", "a/b", `a\b`,
+		"name.", "name ",
+	} {
+		_, err := m.CreateServer(api.CreateServerRequest{Name: bad, Port: 54846, Subnet: "10.0.2.0/24"})
+		if !errors.Is(err, ErrInvalid) {
+			t.Errorf("CreateServer(%q): error = %v, want ErrInvalid", bad, err)
+		}
+	}
+	if got := len(m.cfg.Servers); got != 1 {
+		t.Fatalf("nothing should have been created, got %d servers", got)
+	}
+
+	if _, err := m.CreateServer(api.CreateServerRequest{Name: "second", Port: 54846, Subnet: "10.0.2.0/24"}); err != nil {
+		t.Fatalf("a usable name was refused: %v", err)
+	}
+}
+
 func TestPortInUse(t *testing.T) {
 	m, _ := newTestManager(t)
 

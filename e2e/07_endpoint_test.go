@@ -8,16 +8,6 @@ import (
 	"amneziawg-web-ui/web-ui/api"
 )
 
-// The coordinates of the endpoint editor, on the card and in the dialog.
-const (
-	cardActionsY    = 267
-	endpointButtonX = 480
-	endpointFieldX  = 780
-	endpointFieldY  = 443
-	dialogSaveX     = 793
-	dialogSaveY     = 541
-)
-
 // The endpoint a client config carries is editable on the server card: the
 // dialog sets it, and clearing it puts the server back on the detected public
 // IP. The canvas shows the value as text with no field to read, so it is

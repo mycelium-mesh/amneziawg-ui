@@ -236,6 +236,12 @@ func (b *Client) ClientConfigURL(serverID, clientID string) string {
 	return b.URL(apiBase + "/servers/" + url.PathEscape(serverID) + "/clients/" + url.PathEscape(clientID) + "/config")
 }
 
+// ClientConfigsURL is the download endpoint for the configs of every client
+// of a server, as one zip archive.
+func (b *Client) ClientConfigsURL(serverID string) string {
+	return b.URL(apiBase + "/servers/" + url.PathEscape(serverID) + "/clients/configs")
+}
+
 // ServerConfigURL is the download endpoint for a server .conf file.
 func (b *Client) ServerConfigURL(serverID string) string {
 	return b.URL(apiBase + "/servers/" + url.PathEscape(serverID) + "/config/download")

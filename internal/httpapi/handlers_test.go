@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -26,6 +28,14 @@ import (
 // and whose host commands all fail until the test stubs them.
 func newTestAPI(t *testing.T) (*fiber.App, *manager.Manager, *awgtest.Runner) {
 	t.Helper()
+	return newTestAPIWith(t, nil)
+}
+
+// newTestAPIWith is newTestAPI with the stored config changed before the
+// manager is built. The name rule refuses a name that cannot be a file
+// name, so the names an older release stored have to be seeded here.
+func newTestAPIWith(t *testing.T, seed func(*store.AppConfig, string)) (*fiber.App, *manager.Manager, *awgtest.Runner) {
+	t.Helper()
 	dir := t.TempDir()
 	confPath := filepath.Join(dir, "wg-s1.conf")
 	if err := os.WriteFile(confPath, []byte("[Interface]\nPrivateKey = PRIV\nS1 = 50\n"), 0o600); err != nil {
@@ -33,14 +43,17 @@ func newTestAPI(t *testing.T) (*fiber.App, *manager.Manager, *awgtest.Runner) {
 	}
 
 	st := store.New(filepath.Join(dir, "web_config.json"))
-	err := st.Save(&store.AppConfig{SchemaVersion: store.SchemaVersion, Servers: []api.Server{{
+	cfg := &store.AppConfig{SchemaVersion: store.SchemaVersion, Servers: []api.Server{{
 		ID: "s1", Name: "srv", Interface: "wg-test-absent", ConfigPath: confPath,
 		Subnet: "10.0.1.0/24", ServerIP: "10.0.1.1", MTU: 1280, Port: 54844,
 		Status: "stopped", ObfuscationEnabled: true,
 		ObfuscationParams: &api.ObfuscationParams{S1: 50, S2: 60, S3: 20, S4: 16, MTU: 1280},
 		Clients:           []api.Client{},
-	}}})
-	if err != nil {
+	}}}
+	if seed != nil {
+		seed(cfg, dir)
+	}
+	if err := st.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
 
@@ -61,6 +74,14 @@ func newTestAPI(t *testing.T) (*fiber.App, *manager.Manager, *awgtest.Runner) {
 
 func call(t *testing.T, app *fiber.App, method, path, body string) (int, []byte) {
 	t.Helper()
+	status, data, _ := callWithHeaders(t, app, method, path, body)
+	return status, data
+}
+
+// callWithHeaders is call with the response headers, for the endpoints that
+// answer with a file rather than with a JSON body.
+func callWithHeaders(t *testing.T, app *fiber.App, method, path, body string) (int, []byte, http.Header) {
+	t.Helper()
 	var reader io.Reader
 	if body != "" {
 		reader = strings.NewReader(body)
@@ -78,7 +99,7 @@ func call(t *testing.T, app *fiber.App, method, path, body string) (int, []byte)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return resp.StatusCode, data
+	return resp.StatusCode, data, resp.Header
 }
 
 func addClient(t *testing.T, m *manager.Manager, name string, applyI bool) *api.Client {
@@ -384,6 +405,176 @@ func TestStoredClientServerIDSurvivesLaterRequests(t *testing.T) {
 	}
 	if stored.ServerID != "s1" {
 		t.Errorf("stored ServerID = %q, want \"s1\"", stored.ServerID)
+	}
+}
+
+// The archive of a server's client configs is what the user unpacks instead
+// of downloading every .conf one by one: it must hold one entry per client,
+// with the very same content the single-client download hands out.
+// fileNameOf is the name a Content-Disposition header offers.
+func fileNameOf(disposition string) string {
+	const marker = `filename="`
+	start := strings.Index(disposition, marker)
+	if start < 0 {
+		return ""
+	}
+	name := disposition[start+len(marker):]
+	if end := strings.Index(name, `"`); end >= 0 {
+		name = name[:end]
+	}
+	return name
+}
+
+func TestDownloadAllClientConfigs(t *testing.T) {
+	app, m, _ := newTestAPI(t)
+
+	// A server without clients has an archive as well - an empty one, not
+	// an error: the button is hidden there, but the route has to answer.
+	status, body, _ := callWithHeaders(t, app, http.MethodGet, "/api/servers/s1/clients/configs", "")
+	if status != http.StatusOK {
+		t.Fatalf("the empty archive: status = %d (%s)", status, body)
+	}
+	empty, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("the empty archive does not read: %v", err)
+	}
+	if len(empty.File) != 0 {
+		t.Errorf("the archive of a server without clients holds %d entries", len(empty.File))
+	}
+
+	first := addClient(t, m, "alice", false)
+	second := addClient(t, m, "bob", false)
+
+	status, body, headers := callWithHeaders(t, app, http.MethodGet, "/api/servers/s1/clients/configs", "")
+	if status != http.StatusOK {
+		t.Fatalf("the archive: status = %d (%s)", status, body)
+	}
+	if got := headers.Get("Content-Type"); got != "application/zip" {
+		t.Errorf("content type = %q, want application/zip", got)
+	}
+	disposition := headers.Get("Content-Disposition")
+	if !strings.Contains(disposition, "attachment") || !strings.HasSuffix(disposition, `_clients.zip"`) {
+		t.Errorf("content disposition = %q, want an attachment named after the server", disposition)
+	}
+	// The file lands on whichever desktop the operator unpacks it on, so
+	// its name has to be one Windows accepts.
+	if name := fileNameOf(disposition); strings.ContainsAny(name, `<>:"|?*/\`) {
+		t.Errorf("the archive is named %q, want no character Windows refuses", name)
+	}
+
+	archive, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("the archive does not read: %v", err)
+	}
+	if len(archive.File) != 2 {
+		t.Fatalf("the archive holds %d entries, want one per client (2)", len(archive.File))
+	}
+
+	// A server whose name no desktop would take as a file name still gets
+	// an archive that unpacks everywhere. Such a name is refused at the
+	// input now, but a config written before that rule holds one.
+	oddApp, _, _ := newTestAPIWith(t, func(cfg *store.AppConfig, dir string) {
+		cfg.Servers = append(cfg.Servers, api.Server{
+			ID: "s2", Name: "a:b*c?", Interface: "wg-test-absent2",
+			ConfigPath: filepath.Join(dir, "wg-s2.conf"),
+			Subnet:     "10.0.2.0/24", ServerIP: "10.0.2.1", MTU: 1280, Port: 54846,
+			Status: "stopped", ObfuscationEnabled: true,
+			ObfuscationParams: &api.ObfuscationParams{S1: 50, S2: 60, S3: 20, S4: 16, MTU: 1280},
+			Clients:           []api.Client{},
+		})
+	})
+	_, _, headers = callWithHeaders(t, oddApp, http.MethodGet, "/api/servers/s2/clients/configs", "")
+	if name := fileNameOf(headers.Get("Content-Disposition")); strings.ContainsAny(name, `<>:"|?*/\`) {
+		t.Errorf("the archive is named %q, want no character Windows refuses", name)
+	}
+
+	entries := map[string]string{}
+	for _, file := range archive.File {
+		rc, err := file.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries[file.Name] = string(content)
+	}
+
+	for _, client := range []*api.Client{first, second} {
+		name := client.Name + ".conf"
+		got, ok := entries[name]
+		if !ok {
+			t.Errorf("the archive has no entry %q", name)
+			continue
+		}
+		status, single := call(t, app, http.MethodGet,
+			"/api/servers/s1/clients/"+client.ID+"/config", "")
+		if status != http.StatusOK {
+			t.Fatalf("the single config: status = %d (%s)", status, single)
+		}
+		if got != string(single) {
+			t.Errorf("entry %q differs from the single download:\n%s\n---\n%s", name, got, single)
+		}
+	}
+}
+
+// The file the single download hands out lands on the operator's desktop, so
+// its name has to be one every desktop accepts - a client named "a/b" used
+// to put a path separator into the name. Such a name is refused at the input
+// now, but a config written before that rule holds one.
+func TestDownloadClientConfigNamesTheFileSafely(t *testing.T) {
+	app, _, _ := newTestAPIWith(t, func(cfg *store.AppConfig, _ string) {
+		cfg.Servers[0].Clients = append(cfg.Servers[0].Clients, api.Client{
+			ID: "c1", Name: "a/b:c*d?", ServerID: "s1", ClientIP: "10.0.1.2",
+		})
+	})
+
+	_, _, headers := callWithHeaders(t, app, http.MethodGet,
+		"/api/servers/s1/clients/c1/config", "")
+	name := fileNameOf(headers.Get("Content-Disposition"))
+	if name == "" {
+		t.Fatalf("no file name in %q", headers.Get("Content-Disposition"))
+	}
+	if strings.ContainsAny(name, `<>:"|?*/\`) {
+		t.Errorf("the file is named %q, want no character Windows refuses", name)
+	}
+	if !strings.HasSuffix(name, ".conf") {
+		t.Errorf("the file is named %q, want a .conf", name)
+	}
+}
+
+// A name that cannot be a file name on the desktops people unpack an
+// archive on is a bad request: the file would not carry the name the user
+// gave it.
+func TestCreateWithANameThatCannotBeAFileNameIs400(t *testing.T) {
+	app, _, _ := newTestAPI(t)
+
+	status, body := call(t, app, http.MethodPost, "/api/servers/s1/clients", `{"name":"a/b"}`)
+	if status != http.StatusBadRequest {
+		t.Errorf("client: status = %d, want 400 (%s)", status, body)
+	}
+
+	status, body = call(t, app, http.MethodPost, "/api/servers", `{"name":"a:b","port":54846}`)
+	if status != http.StatusBadRequest {
+		t.Errorf("server: status = %d, want 400 (%s)", status, body)
+	}
+
+	// A name every desktop accepts goes through.
+	status, body = call(t, app, http.MethodPost, "/api/servers/s1/clients", `{"name":"alice"}`)
+	if status != http.StatusOK {
+		t.Errorf("a usable name: status = %d, want 200 (%s)", status, body)
+	}
+}
+
+// A server nobody knows about has no archive to offer.
+func TestDownloadAllClientConfigsOfAnUnknownServerIs404(t *testing.T) {
+	app, _, _ := newTestAPI(t)
+
+	status, body := call(t, app, http.MethodGet, "/api/servers/nope/clients/configs", "")
+	if status != http.StatusNotFound {
+		t.Errorf("unknown server: status = %d, want 404 (%s)", status, body)
 	}
 }
 

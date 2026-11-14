@@ -1,11 +1,14 @@
 package httpapi
 
 import (
+	"archive/zip"
+	"bytes"
 	"fmt"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
 
+	"amneziawg-web-ui/internal/filename"
 	"amneziawg-web-ui/internal/manager"
 	"amneziawg-web-ui/internal/wgconf"
 	"amneziawg-web-ui/web-ui/api"
@@ -87,11 +90,64 @@ func (h *Handlers) downloadClientConfig(c fiber.Ctx) error {
 	}
 
 	// Both names are sanitised on the way in, but this one goes into a
-	// quoted header value, so it is not left to that alone.
-	filename := fmt.Sprintf("%s_%s.conf", wgconf.SanitizeName(client.Name, "client"), wgconf.SanitizeName(client.ServerName, "server"))
-	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	// quoted header value, so it is not left to that alone: the file name
+	// rule is the same one the archive uses, so the file lands on whichever
+	// desktop it is saved on.
+	base := fmt.Sprintf("%s_%s", wgconf.SanitizeName(client.Name, "client"), wgconf.SanitizeName(client.ServerName, "server"))
+	downloadName := filename.Safe(base, "client") + ".conf"
+	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, downloadName))
 	c.Set("Content-Type", "text/plain; charset=utf-8")
 	return c.SendString(configContent)
+}
+
+// downloadClientConfigs packages the configs of every client of one server
+// as a zip archive. The configs themselves are rendered by the manager
+// through the same path a single-client download takes; this handler only
+// writes the archive around them.
+func (h *Handlers) downloadClientConfigs(c fiber.Ctx) error {
+	id := c.Params("id")
+
+	srv, ok := h.mgr.Server(id)
+	if !ok {
+		return fail(c, fmt.Errorf("server %s: %w", id, manager.ErrNotFound))
+	}
+	configs, err := h.mgr.ClientConfigs(id)
+	if err != nil {
+		return fail(c, err)
+	}
+
+	var archive bytes.Buffer
+	zw := zip.NewWriter(&archive)
+	// One timestamp for the whole archive: the entries are written
+	// together, so they share it.
+	now := time.Now()
+	for _, cfg := range configs {
+		// The timestamp is set, or the entry extracts as "00-00-1980
+		// 00:00" - which is what a zip without one gives, and it looks
+		// like a broken archive to whoever unpacks it.
+		w, err := zw.CreateHeader(&zip.FileHeader{
+			Name:     cfg.Name,
+			Method:   zip.Deflate,
+			Modified: now,
+		})
+		if err != nil {
+			return fail(c, fmt.Errorf("adding %q to the archive: %w", cfg.Name, err))
+		}
+		if _, err := w.Write([]byte(cfg.Content)); err != nil {
+			return fail(c, fmt.Errorf("adding %q to the archive: %w", cfg.Name, err))
+		}
+	}
+	if err := zw.Close(); err != nil {
+		return fail(c, fmt.Errorf("finishing the archive: %w", err))
+	}
+
+	// The name goes into a quoted header value, and the file lands on
+	// whichever desktop the operator unpacks it on: the shared file name
+	// rule applies to it as well.
+	archiveName := filename.Safe(wgconf.SanitizeName(srv.Name, "server"), "server") + "_clients.zip"
+	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, archiveName))
+	c.Set("Content-Type", "application/zip")
+	return c.Send(archive.Bytes())
 }
 
 func (h *Handlers) getClientAmneziaLink(c fiber.Ctx) error {

@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"amneziawg-web-ui/web-ui/api"
+	"amneziawg-web-ui/web-ui/internal/ui/browser"
 	"amneziawg-web-ui/web-ui/internal/ui/dialogs"
 	"amneziawg-web-ui/web-ui/internal/ui/env"
 	"amneziawg-web-ui/web-ui/internal/ui/serverlist/serverentry/clientlist"
@@ -111,6 +112,16 @@ func New(e *env.Env, srv api.Server) *Card {
 	editEndpoint := widgets.NewButton(lang.L("Edit endpoint"), theme.DocumentCreateIcon(), func() {
 		serverdialogs.ShowEndpointEditor(e, srv)
 	})
+	// Every client of this server in one archive. The button sits at the end
+	// of the row, so the buttons before it keep the place they had.
+	downloadAll := widgets.NewButton(lang.L("Download all configs"), theme.DownloadIcon(), func() {
+		browser.OpenURL(e.Backend.ClientConfigsURL(srv.ID))
+	})
+	if len(srv.Clients) == 0 {
+		// An archive of a server without clients holds nothing, so there is
+		// nothing to offer here.
+		downloadAll.Disable()
+	}
 
 	if running {
 		start.Disable()
@@ -118,7 +129,7 @@ func New(e *env.Env, srv api.Server) *Card {
 		stop.Disable()
 	}
 
-	actions := container.NewHBox(start, stop, add, config, editEndpoint)
+	actions := container.NewHBox(start, stop, add, config, editEndpoint, downloadAll)
 
 	c.clients = clientlist.New(e, srv)
 
