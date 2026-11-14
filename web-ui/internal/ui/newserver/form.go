@@ -142,8 +142,17 @@ func New(e *env.Env, state State, reflow func()) *Form {
 
 	// The two fields the simple mode asks for sit side by side; the rest of
 	// them only exist in the advanced mode and keep the usual form rows.
-	basics := container.NewGridWithColumns(2,
+	//
+	// The name carries the rule of its own: it lands in the archive's file
+	// name, so the characters a desktop refuses are named under the field
+	// rather than only once the name is refused.
+	nameField := container.NewVBox(
 		widgets.Labeled(lang.L("Server name"), f.name),
+		widgets.MutedNote(lang.L("The characters {{.Chars}} are not accepted, and a name must not end with a dot or a space",
+			map[string]any{"Chars": api.NameForbiddenList})),
+	)
+	basics := container.NewGridWithColumns(2,
+		nameField,
 		widgets.Labeled(lang.L("Port (1-65535)"), f.port),
 	)
 	f.extras = widget.NewForm(
@@ -478,6 +487,12 @@ func (f *Form) build() (api.CreateServerRequest, []string) {
 	name := strings.TrimSpace(f.name.Text)
 	if name == "" {
 		problems = append(problems, lang.L("Server name is required"))
+	}
+	// The name lands in the archive's file name, so it is checked as it was
+	// typed: a name a desktop would refuse is turned down here rather than
+	// reshaped on the way out.
+	if problem := api.ValidateName(f.name.Text); problem != "" {
+		problems = append(problems, lang.L(problem))
 	}
 
 	port, err := strconv.Atoi(strings.TrimSpace(f.port.Text))

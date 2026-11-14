@@ -345,15 +345,53 @@ func TestClientConfigsKeepEveryEntryNameUnique(t *testing.T) {
 	}
 }
 
+// A name that cannot be a file name on the desktops people unpack an
+// archive on is refused at the input: the file would not carry the name the
+// user gave it, and a name with a path separator in it would write outside
+// the directory it is unpacked into.
+func TestAddClientRefusesANameThatCannotBeAFileName(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	for _, bad := range []string{
+		"a<b", "a>b", "a:b", `a"b`, "a|b", "a?b", "a*b", "a/b", `a\b`,
+		"name.", "name ",
+	} {
+		if _, _, err := m.AddClient("s1", api.AddClientRequest{Name: bad}); !errors.Is(err, ErrInvalid) {
+			t.Errorf("AddClient(%q): error = %v, want ErrInvalid", bad, err)
+		}
+	}
+	if got := m.ClientCount(); got != 0 {
+		t.Errorf("clientCount = %d, want 0: a refused name adds no client", got)
+	}
+
+	if _, _, err := m.AddClient("s1", api.AddClientRequest{Name: "alice"}); err != nil {
+		t.Fatalf("a usable name was refused: %v", err)
+	}
+}
+
+// The name is checked as it was typed, before the cleaning: a name the
+// rule refuses stays refused, and the characters a config must not carry
+// are still cleaned away rather than turned down.
+func TestAddClientStillCleansTheNameItAccepts(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	client, _, err := m.AddClient("s1", api.AddClientRequest{Name: "ali\tce [x]"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.Name != "ali ce x" {
+		t.Errorf("stored name = %q, want %q", client.Name, "ali ce x")
+	}
+}
+
 // An archive is unpacked by tools that take its paths literally, so a name
 // with a path separator in it must not write outside the directory it is
-// unpacked into.
+// unpacked into. Such a name is refused at the input now, but a config
+// written before that rule still holds one.
 func TestClientConfigsKeepEntriesInsideTheArchive(t *testing.T) {
 	m, _ := newTestManager(t)
 
-	if _, _, err := m.AddClient("s1", api.AddClientRequest{Name: "../../etc/passwd"}); err != nil {
-		t.Fatal(err)
-	}
+	seedClient(t, m, "c1", "../../etc/passwd")
 
 	files, err := m.ClientConfigs("s1")
 	if err != nil {
@@ -472,14 +510,13 @@ func TestClientConfigsTellCaseInsensitiveNamesakesApart(t *testing.T) {
 
 // The archive is handed to people who unpack it on Windows, where a file
 // name may not hold a set of characters, may not end in a dot or a space,
-// and may not be one of the device names Windows keeps for itself.
+// and may not be one of the device names Windows keeps for itself. The API
+// refuses such names now, but a config written before that rule holds them.
 func TestClientConfigsKeepEntryNamesUsableOnWindows(t *testing.T) {
 	m, _ := newTestManager(t)
 
-	for _, name := range []string{`a:b*c?`, "trailing.", "CON", "with space "} {
-		if _, _, err := m.AddClient("s1", api.AddClientRequest{Name: name}); err != nil {
-			t.Fatal(err)
-		}
+	for i, name := range []string{`a:b*c?`, "trailing.", "CON", "with space "} {
+		seedClient(t, m, fmt.Sprintf("c%d", i), name)
 	}
 
 	files, err := m.ClientConfigs("s1")

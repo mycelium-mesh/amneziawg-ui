@@ -92,8 +92,18 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 		}
 	}
 
+	nameItem := &widget.FormItem{Text: lang.L("Client name"), Widget: name}
+	if !editing {
+		// The name is checked as it is typed, so the rule is stated here
+		// rather than only once it is broken. An existing client keeps the
+		// name it was given: the field is closed, and the name is not part
+		// of what an edit saves.
+		nameItem.HintText = lang.L("The characters {{.Chars}} are not accepted, and a name must not end with a dot or a space",
+			map[string]any{"Chars": api.NameForbiddenList})
+	}
+
 	items := []*widget.FormItem{
-		{Text: lang.L("Client name"), Widget: name},
+		nameItem,
 		{Text: lang.L("Allowed IPs"), Widget: allowedIPs,
 			HintText: lang.L("comma-separated ranges routed through the VPN; default 0.0.0.0/0, ::/0")},
 	}
@@ -122,6 +132,18 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 	dialogs.ShowForm(e.Win, title, confirm, lang.L("Cancel"), dialogs.Scrolled(content), dialogs.Size(e.Win, 760, 620), func() bool {
 		settings := api.ISettings{}
 		var problems []string
+
+		// The name lands in a file name, so it is checked as it was typed:
+		// a name a desktop would refuse is turned down here rather than
+		// reshaped on the way out. An edit does not carry a name, so only
+		// a new client is checked here.
+		if !editing {
+			if problem := api.ValidateName(name.Text); problem != "" {
+				problems = append(problems, lang.L(problem))
+			}
+		}
+
+		var iProblems []string
 		for i, entry := range iEntries {
 			value := strings.TrimSpace(entry.Text)
 			if value == "" {
@@ -129,14 +151,17 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 			}
 			key := fmt.Sprintf("I%d", i+1)
 			if problem := api.ValidateCPS(key, value); problem != "" {
-				problems = append(problems, problem)
+				iProblems = append(iProblems, problem)
 				continue
 			}
 			settings[strings.ToLower(key)] = value
 		}
 		// Only worth checking what will actually be written: with the box
 		// unticked the values are kept but never reach a config.
-		if applyI.Checked && len(problems) > 0 {
+		if applyI.Checked {
+			problems = append(problems, iProblems...)
+		}
+		if len(problems) > 0 {
 			e.Notify.Fail(errors.New(strings.Join(problems, "\n")))
 			return false
 		}

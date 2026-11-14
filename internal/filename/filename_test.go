@@ -3,6 +3,8 @@ package filename
 import (
 	"strings"
 	"testing"
+
+	"amneziawg-web-ui/web-ui/api"
 )
 
 func TestSafeKeepsNamesAnyDesktopAccepts(t *testing.T) {
@@ -20,11 +22,23 @@ func TestSafeReplacesWhatAFileNameMayNotHold(t *testing.T) {
 		"a:b*c?", "a/b", "a\\b", `a"b`, "a<b>c", "a|b", "control\x01char",
 	} {
 		got := Safe(bad, "client")
-		if strings.ContainsAny(got, `<>:"|?*/\`) {
+		if strings.ContainsAny(got, api.NameForbiddenChars) {
 			t.Errorf("Safe(%q) = %q, want no forbidden character left", bad, got)
 		}
 		if strings.ContainsRune(got, 0x01) {
 			t.Errorf("Safe(%q) = %q, want no control character left", bad, got)
+		}
+	}
+}
+
+// Every character the shared name rule refuses has to be replaced here too:
+// the two are one rule, and a character that survives one and not the other
+// is a name the archive would carry into a file Windows refuses.
+func TestSafeReplacesEveryCharacterTheNameRuleRefuses(t *testing.T) {
+	for _, r := range api.NameForbiddenChars {
+		got := Safe("a"+string(r)+"b", "client")
+		if strings.ContainsRune(got, r) {
+			t.Errorf("Safe(%q) = %q, want %q replaced", string(r), got, string(r))
 		}
 	}
 }

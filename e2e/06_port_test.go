@@ -44,7 +44,7 @@ func TestTakenPortRejected(t *testing.T) {
 	a.typeText(strconv.Itoa(taken))
 	a.shot("08-port-taken")
 
-	a.click(87, 323)
+	a.click(87, 364)
 	time.Sleep(3 * time.Second)
 	a.shot("09-port-rejected")
 

@@ -19,12 +19,12 @@ func TestCreateServer(t *testing.T) {
 	// Tick and untick "Advanced settings" first: the rows it appends to the form
 	// and the obfuscation block it reveals have to survive the round trip, and
 	// the page-error check at the end covers a panic on the way.
-	a.click(35, 245)
+	a.click(35, 288)
 	a.shot("02-advanced")
 	a.scroll(750, 500, 3000)
 	a.shot("02-advanced-bottom")
 	a.scroll(750, 500, -3000)
-	a.click(35, 245)
+	a.click(35, 288)
 	a.shot("02-simple")
 
 	// The name is the only thing the simple mode has no default for.
@@ -32,7 +32,7 @@ func TestCreateServer(t *testing.T) {
 	a.typeText("E2E Server")
 	a.shot("03-named")
 
-	a.click(87, 323)
+	a.click(87, 364)
 
 	eventually(t, 60*time.Second, "the server never showed up in /api/servers", func() bool {
 		return len(getJSON[[]api.Server](t, "/api/servers")) == 1

@@ -49,6 +49,25 @@ func newTestManager(t *testing.T) (*Manager, *awgtest.Runner) {
 	return m, run
 }
 
+// seedClient puts a client into the config directly, bypassing the name
+// rule the API enforces. These are the names an older release stored: the
+// archive still has to name their entries safely.
+func seedClient(t *testing.T, m *Manager, id, name string) {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	srv := m.findServer("s1")
+	if srv == nil {
+		t.Fatal("the test server is gone")
+	}
+	srv.Clients = append(srv.Clients, api.Client{
+		ID:       id,
+		Name:     name,
+		ServerID: srv.ID,
+		ClientIP: "10.0.1.2",
+	})
+}
+
 // New brings an older config up to date and writes the result back, so the
 // migration does not run again on the next start.
 func TestNewMigratesAndSavesAnOldConfig(t *testing.T) {

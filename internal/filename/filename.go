@@ -10,12 +10,9 @@ package filename
 
 import (
 	"strings"
-)
 
-// invalid are the characters a Windows file name may not hold. The path
-// separators join them: a name that carries one writes outside the
-// directory it is unpacked into.
-const invalid = `<>:"|?*/\`
+	"amneziawg-web-ui/web-ui/api"
+)
 
 // reserved are the device names Windows keeps for itself. A file called
 // CON cannot be created there, not even with an extension - so the check
@@ -35,9 +32,14 @@ var reserved = map[string]bool{
 // control characters; the trailing dots and spaces Windows drops on its own
 // (which would make two different names one file); and the device names it
 // keeps for itself, which get an underscore in front.
+//
+// The characters are the shared ones: the name rule in web-ui/api refuses
+// them when a name comes in. This package is what rescues the names that
+// got there before that rule existed - a config written by an older release
+// still holds them.
 func Safe(name, fallback string) string {
 	cleaned := strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f || strings.ContainsRune(invalid, r) {
+		if r < 0x20 || r == 0x7f || strings.ContainsRune(api.NameForbiddenChars, r) {
 			return '_'
 		}
 		return r

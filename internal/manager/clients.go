@@ -160,6 +160,14 @@ func (m *Manager) clientConfigOf(serverID string, client *api.Client) string {
 // AddClient adds a WireGuard peer to a server and returns the client with
 // its rendered config.
 func (m *Manager) AddClient(serverID string, req api.AddClientRequest) (*api.Client, string, error) {
+	// The name lands in a file name - the archive's entry, the name of the
+	// single download - so it is checked as it was typed, before the
+	// cleaning below reshapes it: a name a desktop would refuse is turned
+	// down here rather than reshaped on the way out.
+	if problem := api.ValidateName(req.Name); problem != "" {
+		return nil, "", fmt.Errorf("%w: %s", ErrInvalid, problem)
+	}
+
 	// The name lands in a .conf comment, in the peer marker and in a
 	// Content-Disposition filename, so it is cleaned before anything stores
 	// it - not at each of those points.
