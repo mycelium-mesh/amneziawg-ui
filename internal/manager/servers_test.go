@@ -5,8 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"amneziawg-web-ui/internal/awg/awgtest"
 	"amneziawg-web-ui/web-ui/api"
 )
 
@@ -332,4 +335,95 @@ func TestDeleteServerStopsARunningInterfaceFirst(t *testing.T) {
 	if _, ok := m.Server("s1"); ok {
 		t.Error("the server is still listed")
 	}
+}
+
+// A server created while the address changes must not keep the address the
+// host had when the creation started.
+//
+// The creation reads the detected address when it adds the server, and a
+// Refresh IP that lands in between stamps the new address on every server it
+// knows - which, before the server is added, is every server but this one.
+// The creation is therefore held at the key generation - where the old code
+// read the address, and still before the server is added - the address is
+// refreshed, and the creation is let go: the server it produces has to carry
+// the fresh address.
+func TestCreateServerTakesTheAddressOfTheMomentItIsAdded(t *testing.T) {
+	run := awgtest.New()
+	run.Stub("awg genkey", "SPRIV").Stub("echo 'SPRIV' | awg pubkey", "SPUB")
+
+	pause := &pausingRunner{
+		inner:   run,
+		prefix:  "awg genkey",
+		reached: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	m := newTestManagerWith(t, pause)
+	m.setPublicIP("198.51.100.4")
+
+	created := make(chan *api.Server, 1)
+	failed := make(chan error, 1)
+	go func() {
+		srv, err := m.CreateServer(api.CreateServerRequest{Name: "racy", Port: 54846, Subnet: "10.0.2.0/24"})
+		if err != nil {
+			failed <- err
+			return
+		}
+		created <- srv
+	}()
+
+	// Wait for the creation to reach the key generation. A creation that
+	// fails before it would hang here until the whole test binary times
+	// out, so the wait is bounded.
+	select {
+	case <-pause.reached:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the creation never reached the key generation")
+	}
+
+	// What a Refresh IP does to the servers it knows: a new address, on
+	// all of them.
+	m.setPublicIP("198.51.100.9")
+
+	close(pause.release)
+
+	var srv *api.Server
+	select {
+	case srv = <-created:
+	case err := <-failed:
+		t.Fatalf("create: %v", err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the creation never finished")
+	}
+
+	if srv.PublicIP != "198.51.100.9" {
+		t.Errorf("PublicIP = %q, want the refreshed address 198.51.100.9", srv.PublicIP)
+	}
+	stored, _ := m.Server(srv.ID)
+	if stored.PublicIP != "198.51.100.9" {
+		t.Errorf("stored PublicIP = %q, want the refreshed address", stored.PublicIP)
+	}
+	// The config the server hands out has to point at that address too.
+	if got := m.endpointFor(&stored); got != "198.51.100.9" {
+		t.Errorf("endpointFor = %q, want the refreshed address", got)
+	}
+}
+
+// pausingRunner holds every command that starts with prefix until it is
+// released, so a test can let the rest of the world move while one operation
+// stands still.
+type pausingRunner struct {
+	inner  *awgtest.Runner
+	prefix string
+
+	reached chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *pausingRunner) Run(command string) (string, error) {
+	if strings.HasPrefix(command, r.prefix) {
+		r.once.Do(func() { close(r.reached) })
+		<-r.release
+	}
+	return r.inner.Run(command)
 }
