@@ -504,6 +504,28 @@ func TestDownloadAllClientConfigs(t *testing.T) {
 	}
 }
 
+// The file the single download hands out lands on the operator's desktop, so
+// its name has to be one every desktop accepts - a client named "a/b" used
+// to put a path separator into the name.
+func TestDownloadClientConfigNamesTheFileSafely(t *testing.T) {
+	app, m, _ := newTestAPI(t)
+
+	client := addClient(t, m, "a/b:c*d?", false)
+
+	_, _, headers := callWithHeaders(t, app, http.MethodGet,
+		"/api/servers/s1/clients/"+client.ID+"/config", "")
+	name := fileNameOf(headers.Get("Content-Disposition"))
+	if name == "" {
+		t.Fatalf("no file name in %q", headers.Get("Content-Disposition"))
+	}
+	if strings.ContainsAny(name, `<>:"|?*/\`) {
+		t.Errorf("the file is named %q, want no character Windows refuses", name)
+	}
+	if !strings.HasSuffix(name, ".conf") {
+		t.Errorf("the file is named %q, want a .conf", name)
+	}
+}
+
 // A server nobody knows about has no archive to offer.
 func TestDownloadAllClientConfigsOfAnUnknownServerIs404(t *testing.T) {
 	app, _, _ := newTestAPI(t)

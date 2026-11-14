@@ -90,9 +90,12 @@ func (h *Handlers) downloadClientConfig(c fiber.Ctx) error {
 	}
 
 	// Both names are sanitised on the way in, but this one goes into a
-	// quoted header value, so it is not left to that alone.
-	filename := fmt.Sprintf("%s_%s.conf", wgconf.SanitizeName(client.Name, "client"), wgconf.SanitizeName(client.ServerName, "server"))
-	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	// quoted header value, so it is not left to that alone: the file name
+	// rule is the same one the archive uses, so the file lands on whichever
+	// desktop it is saved on.
+	base := fmt.Sprintf("%s_%s", wgconf.SanitizeName(client.Name, "client"), wgconf.SanitizeName(client.ServerName, "server"))
+	downloadName := filename.Safe(base, "client") + ".conf"
+	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, downloadName))
 	c.Set("Content-Type", "text/plain; charset=utf-8")
 	return c.SendString(configContent)
 }
