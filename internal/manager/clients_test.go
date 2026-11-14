@@ -439,3 +439,63 @@ func TestConcurrentClientChurnIsRaceFree(t *testing.T) {
 		}
 	}
 }
+
+// Two clients whose names differ only in case are two files on Linux and one
+// file on macOS and Windows: whoever unpacks the archive would lose one of
+// the two configs, so the names are told apart here as well.
+func TestClientConfigsTellCaseInsensitiveNamesakesApart(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	if _, _, err := m.AddClient("s1", api.AddClientRequest{Name: "Alice"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m.AddClient("s1", api.AddClientRequest{Name: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := m.ClientConfigs("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("the archive holds %d entries, want 2", len(files))
+	}
+	seen := map[string]bool{}
+	for _, file := range files {
+		key := strings.ToLower(file.Name)
+		if seen[key] {
+			t.Errorf("two entries are named %q, which is one file on Windows and macOS", file.Name)
+		}
+		seen[key] = true
+	}
+}
+
+// The archive is handed to people who unpack it on Windows, where a file
+// name may not hold a set of characters, may not end in a dot or a space,
+// and may not be one of the device names Windows keeps for itself.
+func TestClientConfigsKeepEntryNamesUsableOnWindows(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	for _, name := range []string{`a:b*c?`, "trailing.", "CON", "with space "} {
+		if _, _, err := m.AddClient("s1", api.AddClientRequest{Name: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	files, err := m.ClientConfigs("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if strings.ContainsAny(file.Name, `<>:"|?*/\`) {
+			t.Errorf("entry %q carries a character Windows refuses", file.Name)
+		}
+		if strings.HasSuffix(file.Name, ".") || strings.HasSuffix(file.Name, " ") {
+			t.Errorf("entry %q ends in a dot or a space, which Windows drops", file.Name)
+		}
+		base := strings.TrimSuffix(file.Name, ".conf")
+		if base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" {
+			t.Errorf("entry %q is a name Windows keeps for itself", file.Name)
+		}
+	}
+}

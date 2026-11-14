@@ -400,6 +400,20 @@ func TestStoredClientServerIDSurvivesLaterRequests(t *testing.T) {
 // The archive of a server's client configs is what the user unpacks instead
 // of downloading every .conf one by one: it must hold one entry per client,
 // with the very same content the single-client download hands out.
+// fileNameOf is the name a Content-Disposition header offers.
+func fileNameOf(disposition string) string {
+	const marker = `filename="`
+	start := strings.Index(disposition, marker)
+	if start < 0 {
+		return ""
+	}
+	name := disposition[start+len(marker):]
+	if end := strings.Index(name, `"`); end >= 0 {
+		name = name[:end]
+	}
+	return name
+}
+
 func TestDownloadAllClientConfigs(t *testing.T) {
 	app, m, _ := newTestAPI(t)
 
@@ -431,6 +445,11 @@ func TestDownloadAllClientConfigs(t *testing.T) {
 	if !strings.Contains(disposition, "attachment") || !strings.HasSuffix(disposition, `_clients.zip"`) {
 		t.Errorf("content disposition = %q, want an attachment named after the server", disposition)
 	}
+	// The file lands on whichever desktop the operator unpacks it on, so
+	// its name has to be one Windows accepts.
+	if name := fileNameOf(disposition); strings.ContainsAny(name, `<>:"|?*/\`) {
+		t.Errorf("the archive is named %q, want no character Windows refuses", name)
+	}
 
 	archive, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
 	if err != nil {
@@ -438,6 +457,19 @@ func TestDownloadAllClientConfigs(t *testing.T) {
 	}
 	if len(archive.File) != 2 {
 		t.Fatalf("the archive holds %d entries, want one per client (2)", len(archive.File))
+	}
+
+	// A server whose name no desktop would take as a file name still gets
+	// an archive that unpacks everywhere.
+	odd, err := m.CreateServer(api.CreateServerRequest{
+		Name: "a:b*c?", Port: 54846, Subnet: "10.0.2.0/24",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, headers = callWithHeaders(t, app, http.MethodGet, "/api/servers/"+odd.ID+"/clients/configs", "")
+	if name := fileNameOf(headers.Get("Content-Disposition")); strings.ContainsAny(name, `<>:"|?*/\`) {
+		t.Errorf("the archive is named %q, want no character Windows refuses", name)
 	}
 
 	entries := map[string]string{}

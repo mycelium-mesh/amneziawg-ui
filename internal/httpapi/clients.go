@@ -4,11 +4,11 @@ import (
 	"archive/zip"
 	"bytes"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
 
+	"amneziawg-web-ui/internal/filename"
 	"amneziawg-web-ui/internal/manager"
 	"amneziawg-web-ui/internal/wgconf"
 	"amneziawg-web-ui/web-ui/api"
@@ -115,6 +115,9 @@ func (h *Handlers) downloadClientConfigs(c fiber.Ctx) error {
 
 	var archive bytes.Buffer
 	zw := zip.NewWriter(&archive)
+	// One timestamp for the whole archive: the entries are written
+	// together, so they share it.
+	now := time.Now()
 	for _, cfg := range configs {
 		// The timestamp is set, or the entry extracts as "00-00-1980
 		// 00:00" - which is what a zip without one gives, and it looks
@@ -122,7 +125,7 @@ func (h *Handlers) downloadClientConfigs(c fiber.Ctx) error {
 		w, err := zw.CreateHeader(&zip.FileHeader{
 			Name:     cfg.Name,
 			Method:   zip.Deflate,
-			Modified: time.Now(),
+			Modified: now,
 		})
 		if err != nil {
 			return fail(c, fmt.Errorf("adding %q to the archive: %w", cfg.Name, err))
@@ -135,10 +138,11 @@ func (h *Handlers) downloadClientConfigs(c fiber.Ctx) error {
 		return fail(c, fmt.Errorf("finishing the archive: %w", err))
 	}
 
-	// The name goes into a quoted header value, and a server name may hold a
-	// path separator, so it is flattened first.
-	filename := strings.NewReplacer("/", "_", "\\", "_").Replace(wgconf.SanitizeName(srv.Name, "server")) + "_clients.zip"
-	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	// The name goes into a quoted header value, and the file lands on
+	// whichever desktop the operator unpacks it on: the shared file name
+	// rule applies to it as well.
+	archiveName := filename.Safe(wgconf.SanitizeName(srv.Name, "server"), "server") + "_clients.zip"
+	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, archiveName))
 	c.Set("Content-Type", "application/zip")
 	return c.Send(archive.Bytes())
 }

@@ -9,6 +9,7 @@ import (
 
 	"amneziawg-web-ui/internal/amnezialink"
 	"amneziawg-web-ui/internal/awg"
+	"amneziawg-web-ui/internal/filename"
 	"amneziawg-web-ui/internal/netutil"
 	"amneziawg-web-ui/internal/wgconf"
 	"amneziawg-web-ui/web-ui/api"
@@ -95,31 +96,33 @@ func (m *Manager) ClientConfigs(serverID string) ([]ClientConfigFile, error) {
 // clientConfigFileName is the name one client's .conf goes by inside the
 // archive. Two clients may share a name, so the second one carries the
 // client's ID, which is unique.
+//
+// The names already taken are counted in lower case: macOS and Windows
+// treat a file name case-insensitively, so "Alice.conf" and "alice.conf"
+// are one file there, and whoever unpacks the archive would lose one of the
+// two configs.
 func clientConfigFileName(client api.Client, taken map[string]bool) string {
 	base := archiveEntryBase(client.Name)
 
 	name := base + ".conf"
-	if taken[name] {
+	if taken[strings.ToLower(name)] {
 		name = fmt.Sprintf("%s_%s.conf", base, client.ID)
-		for n := 2; taken[name]; n++ {
+		for n := 2; taken[strings.ToLower(name)]; n++ {
 			name = fmt.Sprintf("%s_%s_%d.conf", base, client.ID, n)
 		}
 	}
-	taken[name] = true
+	taken[strings.ToLower(name)] = true
 	return name
 }
 
 // archiveEntryBase is the file name a client's .conf is built from. The
 // name is sanitised on the way in, but an archive is unpacked by tools that
 // take its paths literally: a client named "a/b" would write outside the
-// directory it is unpacked into, so the separators are flattened here.
+// directory it is unpacked into, and a name carrying a character Windows
+// refuses would not extract there at all. The file name rule is the shared
+// one, so the archive works on every desktop it is unpacked on.
 func archiveEntryBase(name string) string {
-	base := strings.NewReplacer("/", "_", "\\", "_").Replace(wgconf.SanitizeName(name, "client"))
-	base = strings.TrimSpace(base)
-	if base == "" || base == "." || base == ".." {
-		return "client"
-	}
-	return base
+	return filename.Safe(wgconf.SanitizeName(name, "client"), "client")
 }
 
 // ClientLink renders the vpn:// link for a client.
