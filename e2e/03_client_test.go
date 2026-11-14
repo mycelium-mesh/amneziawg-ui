@@ -19,7 +19,7 @@ func TestAddClient(t *testing.T) {
 	clientsPath := "/api/servers/" + server.ID + "/clients"
 
 	// "Add client" on the server card.
-	a.click(225, 267)
+	a.click(addClientButtonX, cardActionsY)
 	time.Sleep(1200 * time.Millisecond)
 	a.shot("06-client-dialog")
 

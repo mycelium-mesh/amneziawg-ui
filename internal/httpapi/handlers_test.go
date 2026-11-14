@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -61,6 +63,14 @@ func newTestAPI(t *testing.T) (*fiber.App, *manager.Manager, *awgtest.Runner) {
 
 func call(t *testing.T, app *fiber.App, method, path, body string) (int, []byte) {
 	t.Helper()
+	status, data, _ := callWithHeaders(t, app, method, path, body)
+	return status, data
+}
+
+// callWithHeaders is call with the response headers, for the endpoints that
+// answer with a file rather than with a JSON body.
+func callWithHeaders(t *testing.T, app *fiber.App, method, path, body string) (int, []byte, http.Header) {
+	t.Helper()
 	var reader io.Reader
 	if body != "" {
 		reader = strings.NewReader(body)
@@ -78,7 +88,7 @@ func call(t *testing.T, app *fiber.App, method, path, body string) (int, []byte)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return resp.StatusCode, data
+	return resp.StatusCode, data, resp.Header
 }
 
 func addClient(t *testing.T, m *manager.Manager, name string, applyI bool) *api.Client {
@@ -384,6 +394,91 @@ func TestStoredClientServerIDSurvivesLaterRequests(t *testing.T) {
 	}
 	if stored.ServerID != "s1" {
 		t.Errorf("stored ServerID = %q, want \"s1\"", stored.ServerID)
+	}
+}
+
+// The archive of a server's client configs is what the user unpacks instead
+// of downloading every .conf one by one: it must hold one entry per client,
+// with the very same content the single-client download hands out.
+func TestDownloadAllClientConfigs(t *testing.T) {
+	app, m, _ := newTestAPI(t)
+
+	// A server without clients has an archive as well - an empty one, not
+	// an error: the button is hidden there, but the route has to answer.
+	status, body, _ := callWithHeaders(t, app, http.MethodGet, "/api/servers/s1/clients/configs", "")
+	if status != http.StatusOK {
+		t.Fatalf("the empty archive: status = %d (%s)", status, body)
+	}
+	empty, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("the empty archive does not read: %v", err)
+	}
+	if len(empty.File) != 0 {
+		t.Errorf("the archive of a server without clients holds %d entries", len(empty.File))
+	}
+
+	first := addClient(t, m, "alice", false)
+	second := addClient(t, m, "bob", false)
+
+	status, body, headers := callWithHeaders(t, app, http.MethodGet, "/api/servers/s1/clients/configs", "")
+	if status != http.StatusOK {
+		t.Fatalf("the archive: status = %d (%s)", status, body)
+	}
+	if got := headers.Get("Content-Type"); got != "application/zip" {
+		t.Errorf("content type = %q, want application/zip", got)
+	}
+	disposition := headers.Get("Content-Disposition")
+	if !strings.Contains(disposition, "attachment") || !strings.HasSuffix(disposition, `_clients.zip"`) {
+		t.Errorf("content disposition = %q, want an attachment named after the server", disposition)
+	}
+
+	archive, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("the archive does not read: %v", err)
+	}
+	if len(archive.File) != 2 {
+		t.Fatalf("the archive holds %d entries, want one per client (2)", len(archive.File))
+	}
+
+	entries := map[string]string{}
+	for _, file := range archive.File {
+		rc, err := file.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries[file.Name] = string(content)
+	}
+
+	for _, client := range []*api.Client{first, second} {
+		name := client.Name + ".conf"
+		got, ok := entries[name]
+		if !ok {
+			t.Errorf("the archive has no entry %q", name)
+			continue
+		}
+		status, single := call(t, app, http.MethodGet,
+			"/api/servers/s1/clients/"+client.ID+"/config", "")
+		if status != http.StatusOK {
+			t.Fatalf("the single config: status = %d (%s)", status, single)
+		}
+		if got != string(single) {
+			t.Errorf("entry %q differs from the single download:\n%s\n---\n%s", name, got, single)
+		}
+	}
+}
+
+// A server nobody knows about has no archive to offer.
+func TestDownloadAllClientConfigsOfAnUnknownServerIs404(t *testing.T) {
+	app, _, _ := newTestAPI(t)
+
+	status, body := call(t, app, http.MethodGet, "/api/servers/nope/clients/configs", "")
+	if status != http.StatusNotFound {
+		t.Errorf("unknown server: status = %d, want 404 (%s)", status, body)
 	}
 }
 

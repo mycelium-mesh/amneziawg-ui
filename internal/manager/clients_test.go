@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -163,6 +164,221 @@ func TestClientNameCannotInjectConfigLines(t *testing.T) {
 	}
 	if got := strings.Count(string(conf), "[Peer]"); got != 1 {
 		t.Errorf("[Peer] blocks = %d, want 1:\n%s", got, conf)
+	}
+}
+
+// The archive of a server's client configs must hold exactly what the
+// single-client downloads hand out - the same rendering, one entry per
+// client - or a user who unpacks it gets something else than the app does.
+func TestClientConfigsRenderEveryClientOfTheServer(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	first, _, err := m.AddClient("s1", api.AddClientRequest{Name: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := m.AddClient("s1", api.AddClientRequest{Name: "bob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := m.ClientConfigs("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("the archive holds %d entries, want one per client (2)", len(files))
+	}
+
+	want := map[string]string{}
+	for _, client := range []api.Client{*first, *second} {
+		single, err := m.ClientConfig("s1", client.ID, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want[client.Name+".conf"] = single
+	}
+
+	for _, file := range files {
+		expected, ok := want[file.Name]
+		if !ok {
+			t.Errorf("unexpected entry %q in the archive", file.Name)
+			continue
+		}
+		if file.Content != expected {
+			t.Errorf("entry %q differs from the single download:\n%s\n---\n%s", file.Name, file.Content, expected)
+		}
+	}
+}
+
+// A suspended client's config is still a valid one: the peer is only not
+// served until it is activated again, so the archive has to carry it.
+func TestClientConfigsCarrySuspendedClients(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	client, _, err := m.AddClient("s1", api.AddClientRequest{Name: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.SuspendClient("s1", client.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := m.ClientConfigs("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Name != "alice.conf" {
+		t.Fatalf("the archive of a suspended client = %+v", files)
+	}
+}
+
+// The endpoint a client config carries is the server's own: an archive must
+// not hand out a different host than the single download does.
+func TestClientConfigsCarryTheServerEndpoint(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	client, _, err := m.AddClient("s1", api.AddClientRequest{Name: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m.mu.Lock()
+	m.cfg.Servers[0].Endpoint = "vpn.example.com"
+	m.mu.Unlock()
+
+	files, err := m.ClientConfigs("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("the archive holds %d entries, want 1", len(files))
+	}
+	if !strings.Contains(files[0].Content, "Endpoint = vpn.example.com:54844") {
+		t.Errorf("the entry does not carry the endpoint:\n%s", files[0].Content)
+	}
+	single, err := m.ClientConfig("s1", client.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files[0].Content != single {
+		t.Errorf("entry differs from the single download:\n%s\n---\n%s", files[0].Content, single)
+	}
+}
+
+// Two clients may carry the same name; the archive has to keep them apart,
+// or the second one overwrites the first on unpacking.
+func TestClientConfigsDisambiguateNamesakes(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	if _, _, err := m.AddClient("s1", api.AddClientRequest{Name: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := m.AddClient("s1", api.AddClientRequest{Name: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := m.ClientConfigs("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("the archive holds %d entries, want 2", len(files))
+	}
+	if files[0].Name == files[1].Name {
+		t.Fatalf("both entries are named %q", files[0].Name)
+	}
+	for _, file := range files {
+		if !strings.HasPrefix(file.Name, "alice") || !strings.HasSuffix(file.Name, ".conf") {
+			t.Errorf("entry %q is not a client config", file.Name)
+		}
+	}
+	// The namesake that lost the plain name carries the ID that tells the
+	// two apart.
+	if !strings.Contains(files[1].Name, second.ID) {
+		t.Errorf("entry %q does not carry the client ID", files[1].Name)
+	}
+	if files[0].Name != "alice.conf" {
+		t.Errorf("the first entry = %q, want the plain name", files[0].Name)
+	}
+}
+
+// A client named after the entry a namesake was given must not land on it:
+// every entry of the archive has a name of its own.
+func TestClientConfigsKeepEveryEntryNameUnique(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	if _, _, err := m.AddClient("s1", api.AddClientRequest{Name: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := m.AddClient("s1", api.AddClientRequest{Name: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The name of the entry the second namesake was given.
+	third, _, err := m.AddClient("s1", api.AddClientRequest{Name: "alice_" + second.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := m.ClientConfigs("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 3 {
+		t.Fatalf("the archive holds %d entries, want 3", len(files))
+	}
+	seen := map[string]bool{}
+	for _, file := range files {
+		if seen[file.Name] {
+			t.Errorf("two entries are named %q", file.Name)
+		}
+		seen[file.Name] = true
+	}
+	if !seen["alice.conf"] || !seen["alice_"+second.ID+".conf"] {
+		t.Errorf("the archive does not hold the namesake entries: %v", seen)
+	}
+	// The client named after the namesake's entry carries its own ID.
+	if !seen["alice_"+second.ID+"_"+third.ID+".conf"] {
+		t.Errorf("the client named after a namesake entry has no name of its own: %v", seen)
+	}
+}
+
+// An archive is unpacked by tools that take its paths literally, so a name
+// with a path separator in it must not write outside the directory it is
+// unpacked into.
+func TestClientConfigsKeepEntriesInsideTheArchive(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	if _, _, err := m.AddClient("s1", api.AddClientRequest{Name: "../../etc/passwd"}); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := m.ClientConfigs("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("the archive holds %d entries, want 1", len(files))
+	}
+	if strings.ContainsAny(files[0].Name, `/\`) {
+		t.Errorf("entry %q carries a path separator", files[0].Name)
+	}
+	if files[0].Name != ".._.._etc_passwd.conf" {
+		t.Errorf("entry = %q, want the separators flattened", files[0].Name)
+	}
+}
+
+func TestClientConfigsOfAnUnknownServerFail(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	files, err := m.ClientConfigs("nope")
+	if err == nil {
+		t.Fatalf("the archive of an unknown server = %+v, want an error", files)
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("error = %v, want a not-found", err)
 	}
 }
 

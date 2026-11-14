@@ -66,6 +66,19 @@ func (m *Manager) Client(serverID, clientID string) (api.Client, bool) {
 	return cloneClient(client), true
 }
 
+// serverSnapshot is one server with its clients, copied out of the config in
+// a single read: a caller that needs both halves of a server gets them from
+// the same moment, not from two lookups a write could come between.
+func (m *Manager) serverSnapshot(id string) (api.Server, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	srv := m.findServer(id)
+	if srv == nil {
+		return api.Server{}, false
+	}
+	return cloneServer(srv), true
+}
+
 // ClientCount is the total number of clients across every server.
 func (m *Manager) ClientCount() int {
 	m.mu.RLock()

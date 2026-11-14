@@ -72,6 +72,7 @@ func (h *Handlers) RegisterRoutes(app *fiber.App) {
 	// Clients
 	r.Get("/servers/:id/clients", h.getServerClients)
 	r.Post("/servers/:id/clients", h.addClient)
+	r.Get("/servers/:id/clients/configs", h.downloadClientConfigs)
 	r.Delete("/servers/:id/clients/:clientId", h.deleteClient)
 	r.Put("/servers/:id/clients/:clientId/allowed-ips", h.updateClientAllowedIPs)
 	r.Put("/servers/:id/clients/:clientId/i-settings", h.updateClientISettings)

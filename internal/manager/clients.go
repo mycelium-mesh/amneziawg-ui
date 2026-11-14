@@ -2,6 +2,7 @@ package manager
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -54,6 +55,71 @@ func (m *Manager) ClientConfig(serverID, clientID string, includeComments bool) 
 		return "", err
 	}
 	return wgconf.ClientConf(&srv, &client, m.endpointFor(&srv), includeComments), nil
+}
+
+// ClientConfigFile is one rendered client .conf: the name it goes by inside
+// an archive and the content that goes with it.
+type ClientConfigFile struct {
+	Name    string
+	Content string
+}
+
+// ClientConfigs renders the .conf of every client of one server, suspended
+// ones included: a suspended client's config is still valid, it only stops
+// being served until the client is activated again.
+//
+// The whole set comes out of one snapshot of the server, so the configs in
+// an archive agree with each other, and each of them is rendered by the same
+// wgconf.ClientConf a single-client download uses, so the two cannot drift
+// apart.
+func (m *Manager) ClientConfigs(serverID string) ([]ClientConfigFile, error) {
+	srv, ok := m.serverSnapshot(serverID)
+	if !ok {
+		return nil, serverNotFound(serverID)
+	}
+
+	endpoint := m.endpointFor(&srv)
+
+	files := make([]ClientConfigFile, 0, len(srv.Clients))
+	taken := make(map[string]bool, len(srv.Clients))
+	for i := range srv.Clients {
+		client := &srv.Clients[i]
+		files = append(files, ClientConfigFile{
+			Name:    clientConfigFileName(*client, taken),
+			Content: wgconf.ClientConf(&srv, client, endpoint, true),
+		})
+	}
+	return files, nil
+}
+
+// clientConfigFileName is the name one client's .conf goes by inside the
+// archive. Two clients may share a name, so the second one carries the
+// client's ID, which is unique.
+func clientConfigFileName(client api.Client, taken map[string]bool) string {
+	base := archiveEntryBase(client.Name)
+
+	name := base + ".conf"
+	if taken[name] {
+		name = fmt.Sprintf("%s_%s.conf", base, client.ID)
+		for n := 2; taken[name]; n++ {
+			name = fmt.Sprintf("%s_%s_%d.conf", base, client.ID, n)
+		}
+	}
+	taken[name] = true
+	return name
+}
+
+// archiveEntryBase is the file name a client's .conf is built from. The
+// name is sanitised on the way in, but an archive is unpacked by tools that
+// take its paths literally: a client named "a/b" would write outside the
+// directory it is unpacked into, so the separators are flattened here.
+func archiveEntryBase(name string) string {
+	base := strings.NewReplacer("/", "_", "\\", "_").Replace(wgconf.SanitizeName(name, "client"))
+	base = strings.TrimSpace(base)
+	if base == "" || base == "." || base == ".." {
+		return "client"
+	}
+	return base
 }
 
 // ClientLink renders the vpn:// link for a client.

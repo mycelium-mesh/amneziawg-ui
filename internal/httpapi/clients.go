@@ -1,7 +1,10 @@
 package httpapi
 
 import (
+	"archive/zip"
+	"bytes"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -92,6 +95,52 @@ func (h *Handlers) downloadClientConfig(c fiber.Ctx) error {
 	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	c.Set("Content-Type", "text/plain; charset=utf-8")
 	return c.SendString(configContent)
+}
+
+// downloadClientConfigs packages the configs of every client of one server
+// as a zip archive. The configs themselves are rendered by the manager
+// through the same path a single-client download takes; this handler only
+// writes the archive around them.
+func (h *Handlers) downloadClientConfigs(c fiber.Ctx) error {
+	id := c.Params("id")
+
+	srv, ok := h.mgr.Server(id)
+	if !ok {
+		return fail(c, fmt.Errorf("server %s: %w", id, manager.ErrNotFound))
+	}
+	configs, err := h.mgr.ClientConfigs(id)
+	if err != nil {
+		return fail(c, err)
+	}
+
+	var archive bytes.Buffer
+	zw := zip.NewWriter(&archive)
+	for _, cfg := range configs {
+		// The timestamp is set, or the entry extracts as "00-00-1980
+		// 00:00" - which is what a zip without one gives, and it looks
+		// like a broken archive to whoever unpacks it.
+		w, err := zw.CreateHeader(&zip.FileHeader{
+			Name:     cfg.Name,
+			Method:   zip.Deflate,
+			Modified: time.Now(),
+		})
+		if err != nil {
+			return fail(c, fmt.Errorf("adding %q to the archive: %w", cfg.Name, err))
+		}
+		if _, err := w.Write([]byte(cfg.Content)); err != nil {
+			return fail(c, fmt.Errorf("adding %q to the archive: %w", cfg.Name, err))
+		}
+	}
+	if err := zw.Close(); err != nil {
+		return fail(c, fmt.Errorf("finishing the archive: %w", err))
+	}
+
+	// The name goes into a quoted header value, and a server name may hold a
+	// path separator, so it is flattened first.
+	filename := strings.NewReplacer("/", "_", "\\", "_").Replace(wgconf.SanitizeName(srv.Name, "server")) + "_clients.zip"
+	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Set("Content-Type", "application/zip")
+	return c.Send(archive.Bytes())
 }
 
 func (h *Handlers) getClientAmneziaLink(c fiber.Ctx) error {

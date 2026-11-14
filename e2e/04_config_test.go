@@ -50,7 +50,7 @@ func TestClientConfig(t *testing.T) {
 	// Close, then open the server configuration dialog.
 	a.click(749, 800)
 	time.Sleep(time.Second)
-	a.click(346, 267)
+	a.click(showConfigX, cardActionsY)
 	time.Sleep(2 * time.Second)
 	a.shot("11-server-config")
 

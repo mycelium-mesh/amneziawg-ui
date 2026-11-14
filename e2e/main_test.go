@@ -34,6 +34,27 @@ const (
 	bootTimeout = 120 * time.Second
 )
 
+// Where the server card's row of actions sits, and the buttons and fields
+// the tests click. The row is one line of buttons under the card's head, so
+// every button in it shares the row's y; the x depends on how many buttons
+// precede it.
+const (
+	cardActionsY = 267
+
+	// The actions row, in order: Start, Stop, Add client, Show config,
+	// Edit endpoint, Download all configs.
+	addClientButtonX = 225
+	showConfigX      = 346
+	endpointButtonX  = 480
+	downloadAllX     = 615
+
+	// The endpoint editor's field and its Save button.
+	endpointFieldX = 780
+	endpointFieldY = 443
+	dialogSaveX    = 793
+	dialogSaveY    = 541
+)
+
 var (
 	baseURL string
 	browser playwright.Browser
@@ -208,6 +229,14 @@ func (a *app) noPageErrors() {
 // the browser uses, failing the test on anything but 200.
 func apiGet(t *testing.T, path string) []byte {
 	t.Helper()
+	body, _ := apiGetWithHeaders(t, path)
+	return body
+}
+
+// apiGetWithHeaders is apiGet with the response headers, for the endpoints
+// that answer with a file rather than with a JSON body.
+func apiGetWithHeaders(t *testing.T, path string) ([]byte, http.Header) {
+	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, baseURL+path, nil)
 	must(t, err)
 	req.SetBasicAuth(user, password)
@@ -219,7 +248,7 @@ func apiGet(t *testing.T, path string) []byte {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET %s -> %d: %s", path, resp.StatusCode, body)
 	}
-	return body
+	return body, resp.Header
 }
 
 // getJSON decodes the JSON the backend returns for path into a T.
