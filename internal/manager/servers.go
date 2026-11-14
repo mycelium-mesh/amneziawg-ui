@@ -141,8 +141,8 @@ func (m *Manager) CreateServer(req api.CreateServerRequest) (*api.Server, error)
 	// prefers the stored Endpoint over the stamped PublicIP, so copying the
 	// detected address in here would pin every client config to the address
 	// the host had at creation time, long after Refresh IP has moved on.
-	// PublicIP always carries what the backend detected.
-	publicIP := m.PublicIP()
+	// PublicIP always carries what the backend detected - but it is read
+	// when the server is added, not here: see the lock below.
 	endpoint := strings.TrimSpace(req.Endpoint)
 	if problem := api.ValidateEndpoint(endpoint); problem != "" {
 		return nil, fmt.Errorf("%w: %s", ErrInvalid, problem)
@@ -220,7 +220,6 @@ func (m *Manager) CreateServer(req api.CreateServerRequest) (*api.Server, error)
 		Subnet:             subnet,
 		ServerIP:           serverIP,
 		MTU:                mtu,
-		PublicIP:           publicIP,
 		Endpoint:           endpoint,
 		ObfuscationEnabled: enableObfuscation,
 		ObfuscationParams:  obfParams,
@@ -231,7 +230,14 @@ func (m *Manager) CreateServer(req api.CreateServerRequest) (*api.Server, error)
 		CreatedAt:          float64(time.Now().Unix()),
 	}
 
+	// The detected address is read here, under the lock that adds the
+	// server, and not at the start of the creation: a Refresh IP landing in
+	// between would stamp the new address on every server it knows, and
+	// this one is not among them yet - so it would keep the address the
+	// host had when the creation started, and hand that stale address to
+	// its clients.
 	m.mu.Lock()
+	srv.PublicIP = m.publicIP
 	m.cfg.Servers = append(m.cfg.Servers, srv)
 	m.mu.Unlock()
 	m.saveOrLog("new server")

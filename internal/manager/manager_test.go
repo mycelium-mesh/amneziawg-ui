@@ -19,13 +19,21 @@ import (
 // is down. Tests stub the runner for anything else.
 func newTestManager(t *testing.T) (*Manager, *awgtest.Runner) {
 	t.Helper()
+	run := awgtest.New()
+	return newTestManagerWith(t, run), run
+}
+
+// newTestManagerWith is newTestManager with a runner of the caller's
+// choosing, for the tests that need the host commands to behave in a
+// particular way.
+func newTestManagerWith(t *testing.T, run awg.Runner) *Manager {
+	t.Helper()
 	dir := t.TempDir()
 	confPath := filepath.Join(dir, "wg-s1.conf")
 	if err := os.WriteFile(confPath, []byte("[Interface]\nPrivateKey = PRIV\nS1 = 50\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	run := awgtest.New()
 	settings := config.Settings{
 		WebUIPort: 54845, DefaultMTU: 1280, DefaultSubnet: "10.0.0.0/24", DefaultPort: 54844,
 		DNSServers: []string{"8.8.8.8"}, EnableObfuscation: true,
@@ -46,7 +54,7 @@ func newTestManager(t *testing.T) (*Manager, *awgtest.Runner) {
 		}}},
 	}
 	m.tools.ScriptsDir = filepath.Join(dir, "no-scripts")
-	return m, run
+	return m
 }
 
 // New brings an older config up to date and writes the result back, so the
