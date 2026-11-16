@@ -23,9 +23,10 @@ COPY . .
 # emits the loader page, its stylesheets and the bundle straight into
 # web-ui/wasm.
 #
-# The bundle then ships gzipped and nothing else: 14 MB of layer instead of 49,
-# and the server hands the file over as it is rather than compressing 49 MB
-# again on every cold request (see packedAssets in main.go).
+# The bundle then ships pre-compressed and nothing else: 14 MB of gzip plus
+# about 10 MB of brotli - 24 MB of layer instead of 49 - and the server hands
+# the files over as they are rather than compressing 49 MB again on every
+# cold request (see packedAssets in internal/frontend).
 #
 # The two build tags are the Makefile's WASM_TAGS spelled out inline, so both
 # pipelines ship an identically marked bundle: no_emoji drops the built-in
@@ -48,7 +49,8 @@ COPY . .
 FROM base AS web
 RUN --mount=type=cache,id=awg_mod,target=/go/pkg/mod \
     --mount=type=cache,id=awg_build,target=/root/.cache/go-build \
-    git config --global --add safe.directory /build \
+    apk add --no-cache brotli \
+    && git config --global --add safe.directory /build \
     && tag=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//') \
     && if [ -n "$tag" ]; then \
         sed -i "s/^Version = .*/Version = \"$tag\"/" web-ui/FyneApp.toml; \
@@ -58,6 +60,7 @@ RUN --mount=type=cache,id=awg_mod,target=/go/pkg/mod \
     fi \
     && cd web-ui && go tool fyne package -os wasm --name bundle --release --tags no_emoji,nethttpomithttp2 \
     && ! grep -Fq 'EmojiOneColor' wasm/bundle.wasm \
+    && brotli -q 11 -w 24 wasm/bundle.wasm \
     && gzip -9 wasm/bundle.wasm
 
 # ── Backend ───────────────────────────────────────────────────────
