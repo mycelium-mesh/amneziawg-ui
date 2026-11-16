@@ -155,6 +155,7 @@ func TestEncodingNegotiation(t *testing.T) {
 		{name: "unknown token", accept: "unicorns", status: 200, ce: "", length: 4},
 		{name: "unknown beside gzip", accept: "unicorns, gzip", status: 200, ce: "gzip", length: len(gz)},
 		{name: "uppercase token", accept: "GZip", status: 200, ce: "gzip", length: len(gz)},
+		{name: "x-gzip alias", accept: "x-gzip", status: 200, ce: "gzip", length: len(gz)},
 		{name: "br;q=0 beside gzip", accept: "br;q=0, gzip", status: 200, ce: "gzip", length: len(gz)},
 		{name: "wildcard", accept: "*", status: 200, ce: "br", length: len(brotliBundle)},
 		{name: "identity refused alone", accept: "identity;q=0", status: 406},

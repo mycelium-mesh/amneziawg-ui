@@ -211,7 +211,8 @@ func pickEncoding(header string, hasBrotli bool) string {
 }
 
 // acceptedQuality reads an Accept-Encoding header into coding -> q, keeping
-// only the codings the client listed. A q that cannot be read counts as 0.
+// only the codings the client listed - the x-gzip alias among them, counted
+// as gzip. A q that cannot be read counts as 0.
 func acceptedQuality(header string) map[string]float64 {
 	quality := map[string]float64{}
 
@@ -234,6 +235,16 @@ func acceptedQuality(header string) map[string]float64 {
 			q = min(max(parsed, 0), 1)
 		}
 		quality[coding] = q
+	}
+
+	// x-gzip is the deprecated alias of gzip (RFC 9110): a client spelling
+	// the coding that way is asking for gzip and must not be handed the whole
+	// 32 MB bundle as identity. An explicit gzip keeps its own q - only a
+	// header offering the alias alone is answered through it.
+	if _, listed := quality["gzip"]; !listed {
+		if q, aliased := quality["x-gzip"]; aliased {
+			quality["gzip"] = q
+		}
 	}
 	return quality
 }
