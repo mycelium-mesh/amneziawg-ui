@@ -30,6 +30,21 @@ do
     fi
 done
 
+# The cleanup trap cmd_up installs (pinned linux.bash) is never rewritten by
+# this patch, but QuickUp's forced retry depends on it - issue #11: a start
+# that dies half-created goes out through this trap, del_if removes the
+# leftover kernel interface, and only then does WG_QUICK_FORCE_USERSPACE=1
+# start clean instead of failing on "File exists". Pin it with the same
+# drift-detection discipline as the lines above: a bump of AWG_TOOLS_VERSION
+# that moves or drops this line must fail the image build here, not silently
+# re-break the retry behind a patch that still applies.
+needle="trap 'del_if; exit' INT TERM EXIT"
+count=$(grep -cF "$needle" "$target" || true)
+if [ "$count" != 1 ]; then
+    echo "patch-awg-quick: expected one line matching: $needle (found $count)" >&2
+    exit 1
+fi
+
 tmp=$(mktemp)
 
 # In forced mode the engine must exist before anything else: upstream's own
@@ -56,7 +71,8 @@ for needle in \
     '	if [[ -n ${WG_QUICK_FORCE_USERSPACE:-} ]]; then command -v "${WG_QUICK_USERSPACE_IMPLEMENTATION:-amneziawg-go}" >/dev/null || exit 1; fi' \
     'if [[ -n ${WG_QUICK_FORCE_USERSPACE:-} ]] || ! cmd ip link add "$INTERFACE" type amneziawg; then' \
     '[[ -z ${WG_QUICK_FORCE_USERSPACE:-} && -e /sys/module/amneziawg ]]' \
-    'Kernel module unavailable or incompatible.'
+    'Kernel module unavailable or incompatible.' \
+    "trap 'del_if; exit' INT TERM EXIT"
 do
     if ! grep -qF "$needle" "$target"; then
         echo "patch-awg-quick: patched file is missing: $needle" >&2

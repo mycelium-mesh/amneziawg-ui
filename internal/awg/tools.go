@@ -205,33 +205,87 @@ exit $s'`, iface)
 
 // configRefusal positively identifies an awg syncconf failure as the
 // configuration being refused - the only class that earns the disruptive
-// restart. Parse-level signatures are verbatim from the pinned
-// amneziawg-tools (AWG_TOOLS_VERSION): "Line unrecognized" from
-// config.c:617, "Configuration parsing error" from setconf.c:126 and
-// "Invalid configuration" from setconf.c:132. The apply refusal is
-// setconf.c:144's perror "Unable to modify interface: <strerror>" with
-// ipc.c:70 turning the device's errno into that strerror; its tails are
-// musl's strerror texts as the pinned image's libc prints them (English,
-// __strerror.h lines 49/85/83), case-folded, plus glibc's "Operation not
-// supported" for EOPNOTSUPP. A localized or unrecognized strerror, the get
-// failure at setconf.c:44, a non-ExitError, or any other stderr shape is
-// not identified: unknown means no restart.
+// restart. Every signature is matched at the START of a whole stderr line,
+// in the form the pinned amneziawg-tools (AWG_TOOLS_VERSION) prints it:
+// stderr carries echoed config text as well - a .conf value embedding a
+// signature (SaveConfig = Invalid configuration) comes back inside
+// awg-quick's own echo, "<value>' is neither true nor false" (pinned
+// linux.bash:80, die() at :35-38 - "$PROGRAM: $*"), and no echo of config
+// content may classify itself.
+//
+// The signatures, all verbatim from the pinned tree:
+//
+//	"Line unrecognized: `<line>'"          config.c:617, line prefix
+//	"Configuration parsing error"          setconf.c:126, the whole line;
+//	                                        prints when config_read_line
+//	                                        returns false
+//	"Invalid configuration"                setconf.c:132, the whole line;
+//	                                        config_read_finish refused the
+//	                                        device
+//	"Unable to parse <key>: `<value>'"     config.c:408 (parse_uint16:
+//	                                        Jc/Jmin/Jmax/S1-S4) and
+//	                                        config.c:440 (parse_bool:
+//	                                        RandomTrailers/DisableCookies),
+//	                                        line prefix - these exit(1)
+//	                                        mid-read, so setconf.c:126's
+//	                                        suffix never follows and nothing
+//	                                        else in stderr marks them; the
+//	                                        return-false members of the same
+//	                                        family (config.c:59, :179, :220,
+//	                                        :398, :417) already reach :126.
+//	                                        One member is excluded by name:
+//	                                        "Unable to parse
+//	                                        WG_ENDPOINT_RESOLUTION_RETRIES:
+//	                                        `<v>'" (config.c:197) has the
+//	                                        same shape but parses an
+//	                                        environment variable - not the
+//	                                        configuration, and no restart can
+//	                                        fix it.
+//	"Unable to modify interface: <strerror>" setconf.c:144's perror with
+//	                                        ipc.c:70 turning the device's
+//	                                        errno into that strerror; its
+//	                                        tails are musl's strerror texts
+//	                                        as the pinned image's libc prints
+//	                                        them (English, __strerror.h lines
+//	                                        49/85/83), case-folded, plus
+//	                                        glibc's "Operation not supported"
+//	                                        for EOPNOTSUPP - the line must be
+//	                                        exactly the message plus one of
+//	                                        those tails.
+//
+// A localized or unrecognized strerror, the get failure at setconf.c:44, a
+// non-ExitError, an echoed value, or any other stderr shape is not
+// identified: unknown means no restart.
 func configRefusal(err error) bool {
 	var exitErr *ExitError
 	if !errors.As(err, &exitErr) {
 		return false
 	}
-	stderr := exitErr.Stderr
-	if strings.Contains(stderr, "Line unrecognized: `") ||
-		strings.Contains(stderr, "Configuration parsing error") ||
-		strings.Contains(stderr, "Invalid configuration") {
-		return true
+	for _, raw := range strings.Split(exitErr.Stderr, "\n") {
+		line := strings.TrimSpace(raw)
+
+		switch {
+		case strings.HasPrefix(line, "Line unrecognized: `"),
+			line == "Configuration parsing error",
+			line == "Invalid configuration":
+			return true
+		case strings.HasPrefix(line, "Unable to parse WG_ENDPOINT_RESOLUTION_RETRIES: "):
+			// Same shape as the value-parser family, wrong class: an
+			// environment variable, not the .conf. Not identified.
+		case strings.HasPrefix(line, "Unable to parse "):
+			return true
+		}
+
+		const modify = "Unable to modify interface: "
+		if !strings.HasPrefix(line, modify) {
+			continue
+		}
+		switch strings.ToLower(line[len(modify):]) {
+		case "invalid argument", "operation not supported", "not supported", "protocol not supported":
+			return true
+		}
 	}
-	low := strings.ToLower(stderr)
-	return strings.Contains(low, "unable to modify interface: invalid argument") ||
-		strings.Contains(low, "unable to modify interface: operation not supported") ||
-		strings.Contains(low, "unable to modify interface: not supported") ||
-		strings.Contains(low, "unable to modify interface: protocol not supported")
+	return false
 }
 
 // InterfaceUp reports whether the kernel has the interface. It shells out,

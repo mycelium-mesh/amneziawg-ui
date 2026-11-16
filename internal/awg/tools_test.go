@@ -339,6 +339,59 @@ func TestSyncConfRestartsWhenTheConfigFailsToParse(t *testing.T) {
 	}
 }
 
+// The value parsers' exit(1) shapes are config refusals too: pinned
+// config.c:408 (parse_uint16: Jc/Jmin/Jmax/S1-S4) and config.c:440
+// (parse_bool: RandomTrailers/DisableCookies) die mid-read on a malformed
+// value - `Jc = 5.5`, `RandomTrailers = 2x` - and setconf's
+// "Configuration parsing error" (setconf.c:126) never follows, because that
+// prints only when config_read_line returns false. The restart chain must
+// still engage; with the value still broken it fails and reports both, and
+// the server stops rather than running on stale settings.
+func TestSyncConfRestartsWhenAValueParserExitsMidRead(t *testing.T) {
+	malformed := &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "Unable to parse RandomTrailers: `2x'"}
+	run := awgtest.New().
+		Fail(applyPrefix, malformed).
+		Stub("/usr/bin/awg-quick down wg-1", "").
+		Fail("/usr/bin/awg-quick up wg-1", malformed)
+
+	err := awg.New(run).SyncConf("wg-1")
+	want := "awg syncconf wg-1: exit status 1: Unable to parse RandomTrailers: `2x'" +
+		"; restart failed: awg-quick up wg-1: exit status 1:" +
+		" Unable to parse RandomTrailers: `2x'"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %q, want %q", err, want)
+	}
+	if len(run.Commands) != 4 {
+		t.Errorf("commands = %v, want the apply, the down and both up attempts of the restart", run.Commands)
+	}
+}
+
+// A signature echoed back inside config text is not a signature. Strip's own
+// read_bool (pinned linux.bash:80, die() at :35-38) echoes the raw value:
+// `SaveConfig = Invalid configuration` dies with
+// "awg-quick: `Invalid configuration' is neither true nor false" - whose
+// echo contains a substring the old whole-stderr match classified as a
+// refusal, restarting a live server on an unclassifiable shape. Anchored to
+// the tool messages' line forms, the echo matches nothing: the error comes
+// back and not one command beyond the apply runs.
+func TestSyncConfDoesNotRestartOnAnEchoedSignature(t *testing.T) {
+	stripDied := &awg.ExitError{
+		Err:    errors.New("exit status 1"),
+		Stderr: "awg-quick: `Invalid configuration' is neither true nor false",
+	}
+	run := awgtest.New().Fail(applyPrefix, stripDied)
+
+	err := awg.New(run).SyncConf("wg-1")
+	want := "awg syncconf wg-1: exit status 1:" +
+		" awg-quick: `Invalid configuration' is neither true nor false"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %q, want %q", err, want)
+	}
+	if len(run.Commands) != 1 {
+		t.Errorf("commands = %v, want the apply alone, interface untouched", run.Commands)
+	}
+}
+
 // An infrastructural failure - a busy device, not a refusal of the
 // settings - leaves the interface exactly as it was: the sync error comes
 // back naming the failure, and not one restart command runs.

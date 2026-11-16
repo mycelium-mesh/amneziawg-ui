@@ -32,7 +32,7 @@ func (e *ExitError) Error() string {
 func (e *ExitError) Unwrap() error { return e.Err }
 
 // Shell runs commands through bash, which is what the container has and what
-// the process substitution in SyncConf needs.
+// SyncConf's compound apply script needs.
 type Shell struct{}
 
 // Run implements Runner.

@@ -10,15 +10,21 @@ import (
 
 // upstreamAddIf is add_if as the pinned awg-quick ships it - the only part
 // scripts/patch-awg-quick.sh rewrites - plus the minimum around it needed to
-// run the function. When AWG_TOOLS_VERSION moves and upstream changes this
-// function, the patch script fails the image build on its own line checks;
-// this fixture then follows so the behavior stays covered.
+// run the function, and cmd_up's cleanup trap: the patch script never
+// rewrites that line but pins it (QuickUp's retry, issue #11), so the
+// fixture carries it exactly once as shipped. When AWG_TOOLS_VERSION moves
+// and upstream changes this function or that trap, the patch script fails
+// the image build on its own line checks; this fixture then follows so the
+// behavior stays covered.
 const upstreamAddIf = `#!/bin/bash
 set -e -o pipefail
 INTERFACE=wg-test
 cmd() {
 	echo "[#] $*" >&2
 	"$@"
+}
+cmd_up() {
+	trap 'del_if; exit' INT TERM EXIT
 }
 add_if() {
 	local ret
