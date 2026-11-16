@@ -60,8 +60,10 @@ type Manager struct {
 // removal) - are critical sections per interface: no part of one flow
 // interleaves another on the same server, so a stop cannot land between a
 // start's up and its firewall rules, an apply cannot push a config against
-// an interface a stop is tearing down, and a start cannot resurrect the
-// interface of a server a delete just removed.
+// an interface a stop is tearing down, and a start re-checking the store
+// under the same lock cannot resurrect a server a delete just removed -
+// that removal being authoritative in the store even when the delete's
+// best-effort file removal failed.
 // Different interfaces stay independent: the registry mutex guards only the
 // map and is released before any flow lock is awaited, so nothing nests.
 //

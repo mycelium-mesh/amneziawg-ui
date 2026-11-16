@@ -161,6 +161,61 @@ func TestDeleteDoesNotInterleaveWithAStartOnOneServer(t *testing.T) {
 	}
 }
 
+// The store, not awg-quick's luck, decides whether a start may proceed: a
+// delete that ran to completion first must leave a later start failing
+// cleanly - not found, not one host command - even though the start had
+// already read the server before the delete finished. The delete's .conf
+// removal is best-effort (removeServerLocked ignores os.Remove's error), so
+// only the store re-check under the same flow lock closes the window where
+// a leftover .conf could resurrect the interface of a server that is gone.
+func TestStartAfterAFinishedDeleteFindsNoServer(t *testing.T) {
+	run := newFlowRunner("ip link show")
+	run.up = false
+	m := newTestManagerWith(t, run)
+	deployScripts(t, m)
+
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- m.DeleteServer("s1") }()
+	select {
+	case <-run.entered: // the delete holds the flow, mid-decision
+	case <-time.After(2 * time.Second):
+		t.Fatal("the delete never reached its status check")
+	}
+	before := len(run.recorded())
+
+	// The start resolves the server while it still exists, then queues on
+	// the same flow lock behind the delete. The sleep gives the goroutine
+	// time to get that far - entry check and lock acquisition are pure
+	// in-memory work, so a scheduling delay here would only let the entry
+	// check see the already-deleted server and miss the window this test
+	// exists for.
+	startDone := make(chan error, 1)
+	go func() { startDone <- m.StartServer("s1") }()
+	time.Sleep(100 * time.Millisecond)
+
+	run.release <- struct{}{}
+	select {
+	case err := <-deleteDone:
+		if err != nil {
+			t.Fatalf("DeleteServer = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the delete never finished")
+	}
+
+	select {
+	case err := <-startDone:
+		if !errors.Is(err, ErrNotFound) {
+			t.Errorf("StartServer = %v, want a not-found error", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the start never finished after the delete")
+	}
+	if cmds := run.recorded(); len(cmds) != before {
+		t.Errorf("the start ran host commands for a deleted server: %v", cmds[before:])
+	}
+}
+
 // The stop and the live apply are each a critical section on one server: a
 // stop arriving while the apply is in flight must not run a single host
 // command until the apply has finished - no cleanup under an apply that is

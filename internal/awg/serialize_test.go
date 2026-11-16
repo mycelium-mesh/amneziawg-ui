@@ -184,6 +184,67 @@ func TestOperationsOnDifferentInterfacesDoNotBlock(t *testing.T) {
 	}
 }
 
+// Proposition 5's apply-vs-apply case: two SyncConf restarts overlapping on
+// one interface interleave nowhere - each one's whole sequence (apply,
+// down, up, check) runs strictly after the other's - so no restart can find
+// the interface stranded between another restart's halves.
+func TestOverlappingAppliesDoNotInterleaveTheirRestarts(t *testing.T) {
+	run := &scriptedRunner{
+		blockOn: "awg-quick up wg-1",
+		failOn:  "awg syncconf",
+		entered: make(chan string, 4),
+		release: make(chan struct{}, 4),
+	}
+	tools := awg.New(run)
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- tools.SyncConf("wg-1") }()
+	select {
+	case <-run.entered: // the first restart's up is open
+	case <-time.After(2 * time.Second):
+		t.Fatal("the first apply never reached its restart")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- tools.SyncConf("wg-1") }()
+	select {
+	case err := <-secondDone:
+		t.Fatalf("the second apply completed while the first was mid-restart: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	applies := 0
+	for _, c := range run.recorded() {
+		if strings.Contains(c, "awg syncconf") {
+			applies++
+		}
+	}
+	if applies != 1 {
+		t.Fatalf("applies recorded mid-restart = %d, want the first's own only", applies)
+	}
+
+	run.release <- struct{}{} // the first restart's up proceeds
+	if err := await(t, firstDone); err != nil {
+		t.Fatalf("first SyncConf = %v, want nil after its restart", err)
+	}
+	run.release <- struct{}{} // the second's, once it gets there
+	if err := await(t, secondDone); err != nil {
+		t.Fatalf("second SyncConf = %v, want nil after its restart", err)
+	}
+
+	got := run.recorded()
+	apply, down, up, check := applyCmd("wg-1"), "/usr/bin/awg-quick down wg-1",
+		"/usr/bin/awg-quick up wg-1", "ip link show wg-1"
+	want := []string{apply, down, up, check, apply, down, up, check}
+	if len(got) != len(want) {
+		t.Fatalf("commands = %v, want each restart whole and strictly after the other: %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("command %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 // The stop's firewall cleanup arriving during an in-flight restart must run
 // after the whole syncconf -> down -> up sequence, never inside it: rules
 // stripped from under a restarting interface leave it running without a

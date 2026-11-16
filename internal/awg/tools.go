@@ -92,16 +92,22 @@ func (t *Tools) quickUp(iface string) error {
 }
 
 // upAttempt is one awg-quick up attempt, and the proof that it did what its
-// exit status claims. Upstream's add_if quirk (pinned linux.bash) takes ret
-// from an `if !` condition, where it is always 0, so when
-// /sys/module/amneziawg exists but `ip link add` fails, awg-quick exits 0
-// having created nothing - and a caller trusting that status would mark the
-// server running and install firewall rules for an interface that is not
-// there. So a zero exit alone is not a start: the kernel is asked whether
-// the interface exists, and a success with no interface behind it is
-// reported as the failure it is. The ask is one Runner command like every
-// other here - it takes no lock of its own, so running it under the
-// interface lock costs only the serialization the flow already has.
+// exit status claims. A zero exit with no interface behind it is genuinely
+// reachable: the userspace engine daemonizes, so the parent can exit 0
+// while the daemon dies again with no interface laid down (the daemon-death
+// race), and the check doubles as defense-in-depth against any other
+// exit-0-with-nothing. So after every attempt that exits 0 the kernel is
+// asked whether the interface exists, and a success with nothing to show
+// for it is reported as the failure it is: no caller marks a server running
+// or lays down firewall rules for an interface that is not there. It is
+// not, though, a guard against upstream add_if's `exit $ret` quirk (pinned
+// linux.bash): that status survives cmd_up's EXIT trap on the image's bash,
+// and the trap's del_if then fails under `set -e` on the never-created
+// device, so the run ends non-zero anyway - that state's real defects are
+// the missing userspace fallback and a cleanup error that hides the cause,
+// not a phantom success. The ask is one Runner command like every other
+// here - it takes no lock of its own, so running it under the interface
+// lock costs only the serialization the flow already has.
 func (t *Tools) upAttempt(iface, cmd string) error {
 	if _, err := t.run.Run(cmd); err != nil {
 		return err

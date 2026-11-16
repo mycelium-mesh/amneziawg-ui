@@ -426,11 +426,12 @@ func TestSyncConfUnknownFailureDoesNotRestart(t *testing.T) {
 	}
 }
 
-// Issue #32: awg-quick can exit 0 having created nothing - upstream's
-// add_if takes ret from an `if !` condition, where it is always 0, so when
-// /sys/module/amneziawg exists but `ip link add` fails, `up` reports success
-// with no interface behind it. QuickUp must not trust that exit status:
-// both attempts are checked, and a phantom success is a failure.
+// Issue #32: a zero exit must not be taken as proof of an interface. The
+// genuinely reachable phantom is the userspace engine: it daemonizes, so
+// the parent can report success while the daemon dies again and leaves
+// nothing behind (the daemon-death race) - and the check is also
+// defense-in-depth against any other exit-0-with-nothing. QuickUp verifies
+// both attempts this way, so a phantom success is a failure.
 func TestQuickUpDoesNotTrustASuccessThatCreatedNoInterface(t *testing.T) {
 	run := awgtest.New().
 		Stub("/usr/bin/awg-quick up wg-1", "").

@@ -359,9 +359,11 @@ func (m *Manager) subnetInUse(subnet string) (string, bool) {
 
 // DeleteServer stops and removes a server and its clients. The whole
 // decision - the running check, the stop it may need, the removal - runs
-// under the interface's flow lock (lockFlow): a start racing a delete then
-// runs entirely before or after it, so no interface can come up with the
-// firewall rules of a server that is gone.
+// under the interface's flow lock (lockFlow): a start racing a delete runs
+// entirely before or after it, and one that runs after re-checks the store
+// under the same lock and finds the server gone - so a deleted server's
+// interface cannot come back up, even though removing its .conf is
+// best-effort.
 func (m *Manager) DeleteServer(serverID string) error {
 	srv, ok := m.Server(serverID)
 	if !ok {
@@ -412,9 +414,10 @@ func (m *Manager) removeServerLocked(serverID string) bool {
 	return true
 }
 
-// StartServer brings up a WireGuard interface. The whole flow - up and
-// firewall setup - runs under the interface's flow lock (lockFlow), so a
-// stop or an apply on this server cannot interleave with it.
+// StartServer brings up a WireGuard interface. The whole flow - the store
+// re-check, up and firewall setup - runs under the interface's flow lock
+// (lockFlow), so a stop, a delete or an apply on this server cannot
+// interleave with it.
 func (m *Manager) StartServer(serverID string) error {
 	srv, ok := m.Server(serverID)
 	if !ok {
@@ -423,6 +426,16 @@ func (m *Manager) StartServer(serverID string) error {
 
 	unlock := m.lockFlow(srv.Interface)
 	defer unlock()
+
+	// The store decides, under the lock: a delete racing this start
+	// serializes on the same flow lock, and whichever runs second takes the
+	// store as the first left it. The delete's file removal is best-effort
+	// - removeServerLocked ignores os.Remove's error - so without this
+	// re-check a leftover .conf would let awg-quick resurrect the interface
+	// of a server that is gone.
+	if _, ok := m.Server(serverID); !ok {
+		return serverNotFound(serverID)
+	}
 
 	// awg-quick has nothing to do on an interface that is already up: it
 	// fails with "File exists", which is a conflict, not a broken server.
