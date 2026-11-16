@@ -129,15 +129,24 @@ func TestClientDialogStandardISettings(t *testing.T) {
 		"i1": "<b 0xaabb>",
 		"i2": shipped["i2"], "i3": shipped["i3"], "i4": shipped["i4"], "i5": shipped["i5"],
 	})
+	// The request event reaches this counter asynchronously, so wait for it
+	// to arrive and then check for exactly one: no further save is clicked
+	// before the next count, so anything above one is a duplicate.
+	eventually(t, 30*time.Second, "the save never left the browser as a PUT", func() bool {
+		return count(&puts) >= 1
+	})
 	if n := count(&puts); n != 1 {
 		t.Errorf("Save as my standard sent %d PUTs, want 1", n)
 	}
 	// The save re-reads the set from the backend - the cache the next
 	// dialog opens with, and the source of its placeholders. One GET is the
-	// page load; the save must add one of its own.
-	if n := count(&refreshes); n < 2 {
-		t.Errorf("after the save the page fetched the standard %d times, want at least 2 (page load + refresh)", n)
-	}
+	// page load; the save must add one of its own. That refresh only starts
+	// once the PUT comes back, so its request is waited for the same way: a
+	// single read here races the browser under load, while a refresh that
+	// never happens still fails the wait below.
+	eventually(t, 30*time.Second, "after the save the page never re-read the standard", func() bool {
+		return count(&refreshes) >= 2
+	})
 	a.shot("18-i1-saved")
 
 	// Close and reopen: the saved value is what the I1 field now offers as
@@ -169,6 +178,11 @@ func TestClientDialogStandardISettings(t *testing.T) {
 	wantStandard(t, "after the partial save", api.ISettings{
 		"i1": "<b 0xaabb>", "i2": "<r 20>",
 		"i3": shipped["i3"], "i4": shipped["i4"], "i5": shipped["i5"],
+	})
+	// Wait for the second request event as well, then insist on exactly two
+	// - and settle the counter before the all-empty guard snapshots it.
+	eventually(t, 30*time.Second, "the second save never left the browser as a PUT", func() bool {
+		return count(&puts) >= 2
 	})
 	if n := count(&puts); n != 2 {
 		t.Errorf("Save as my standard sent %d PUTs, want 2", n)
@@ -206,6 +220,11 @@ func TestClientDialogStandardISettings(t *testing.T) {
 		return getJSON[api.ISettings](t, "/api/default-i-settings")["i1"] == shipped["i1"]
 	})
 	wantShipped(t, "after the restore", getJSON[api.ISettings](t, "/api/default-i-settings"), shipped)
+	// Same asynchronous counter: wait for the DELETE to be observed, then
+	// insist there was exactly one.
+	eventually(t, 30*time.Second, "the restore never left the browser as a DELETE", func() bool {
+		return count(&deletes) >= 1
+	})
 	if n := count(&deletes); n != 1 {
 		t.Errorf("Restore shipped defaults sent %d DELETEs, want 1", n)
 	}
