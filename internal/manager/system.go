@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"amneziawg-web-ui/internal/store"
 	"amneziawg-web-ui/internal/wgconf"
 	"amneziawg-web-ui/web-ui/api"
 )
@@ -67,14 +68,18 @@ func (m *Manager) DefaultISettings() api.ISettings {
 	return wgconf.MergeISettings(m.cfg.DefaultISettings)
 }
 
-// UpdateDefaultISettings replaces the operator's saved standard I1-I5 set;
-// it does not merge into the previous one. Values go through the same
-// shared rules the form and the client-update path use, so a typo is
-// rejected here as an invalid request before it reaches any client config.
-// An empty or absent set clears the override and restores the shipped
-// defaults. Only the five keys holding a non-empty value are kept: an empty
-// value is "no opinion" - exactly what layering already means - and a
-// stray key would otherwise travel into the effective set.
+// UpdateDefaultISettings merges the operator's update into the saved standard
+// I1-I5 set: only the keys holding a non-empty value change, and every key
+// the request leaves out or sends empty keeps its current state in the saved
+// set - including "no saved override", where the shipped default stays live.
+// That is the layering rule wgconf.MergeISettings already states ("an empty
+// value in a layer does not clear the key") applied to the save itself, so a
+// partially-filled save can never silently drop a value the operator saved
+// earlier. A request with nothing filled in changes nothing. Values go
+// through the same shared rules the form and the client-update path use, so
+// a typo is rejected here as an invalid request before it reaches any client
+// config. Only the five keys holding a non-empty value are kept: a stray key
+// would otherwise travel into the effective set.
 //
 // It returns the effective set as it now stands.
 func (m *Manager) UpdateDefaultISettings(settings api.ISettings) (api.ISettings, error) {
@@ -82,28 +87,52 @@ func (m *Manager) UpdateDefaultISettings(settings api.ISettings) (api.ISettings,
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 
-	saved := api.ISettings{}
+	updates := api.ISettings{}
 	for i := 1; i <= 5; i++ {
 		key := fmt.Sprintf("i%d", i)
-		if strings.TrimSpace(settings[key]) != "" {
-			saved[key] = settings[key]
+		if value := strings.TrimSpace(settings[key]); value != "" {
+			updates[key] = value
 		}
 	}
-
-	m.mu.Lock()
-	previous := m.cfg.DefaultISettings
-	m.cfg.DefaultISettings = saved
-	m.mu.Unlock()
-
-	// A save failure is reported, and the in-memory value put back, the
-	// way the endpoint update does it: this is a change the operator asked
-	// for, and a silent failure would show the new set in GET while the old
-	// one came back on the next restart.
-	if err := m.SaveConfig(); err != nil {
-		m.mu.Lock()
-		m.cfg.DefaultISettings = previous
-		m.mu.Unlock()
-		return nil, fmt.Errorf("saving the default I-settings: %w", err)
+	if len(updates) == 0 {
+		// Nothing was filled in: no opinion, no change, no write.
+		return m.DefaultISettings(), nil
 	}
-	return wgconf.MergeISettings(saved), nil
+
+	err := m.updateConfig("the default I-settings", func(cfg *store.AppConfig) (func(), error) {
+		previous := cfg.DefaultISettings
+		merged := make(api.ISettings, len(previous)+len(updates))
+		for key, value := range previous {
+			merged[key] = value
+		}
+		for key, value := range updates {
+			merged[key] = value
+		}
+		cfg.DefaultISettings = merged
+		return func() { cfg.DefaultISettings = previous }, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return m.DefaultISettings(), nil
+}
+
+// ClearDefaultISettings drops the operator's saved standard: the one explicit
+// full clear, and the only way a saved override leaves the set. The shipped
+// defaults stand again. Clearing an already-clear set changes nothing.
+//
+// It returns the effective set as it now stands.
+func (m *Manager) ClearDefaultISettings() (api.ISettings, error) {
+	err := m.updateConfig("the default I-settings", func(cfg *store.AppConfig) (func(), error) {
+		if len(cfg.DefaultISettings) == 0 {
+			return nil, nil
+		}
+		previous := cfg.DefaultISettings
+		cfg.DefaultISettings = api.ISettings{}
+		return func() { cfg.DefaultISettings = previous }, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return m.DefaultISettings(), nil
 }

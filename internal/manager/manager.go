@@ -105,6 +105,33 @@ func (m *Manager) SaveConfig() error {
 	return m.store.Save(m.cfg)
 }
 
+// updateConfig is the one way a caller-visible change reaches both memory and
+// disk: it runs change under the write lock and keeps that lock across the
+// write, so no other mutation can slip between the assignment and the file -
+// what a reader sees when the dust settles is what a restart loads. change
+// runs under the lock and returns how to put the config back; a nil undo
+// means nothing changed and nothing is written, and an error from change
+// leaves the config untouched (it is returned as it stands, so a typed error
+// like serverNotFound keeps its meaning). If the write fails, the undo runs
+// under the same lock before it is released, restoring exactly the state the
+// file still holds - store.Save is atomic, so a failed write leaves the
+// previous file contents behind. The write goes to the store directly: this
+// lock is already held, and SaveConfig would take it again.
+func (m *Manager) updateConfig(what string, change func(*store.AppConfig) (undo func(), err error)) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	undo, err := change(m.cfg)
+	if err != nil || undo == nil {
+		return err
+	}
+	if err := m.store.Save(m.cfg); err != nil {
+		undo()
+		return fmt.Errorf("saving %s: %w", what, err)
+	}
+	return nil
+}
+
 // saveOrLog saves the config where the caller has no way to report a failure.
 // what names the operation whose result was about to be persisted, so the log
 // line says which change is at risk of being lost on the next restart.

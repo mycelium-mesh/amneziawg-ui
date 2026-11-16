@@ -81,7 +81,7 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 		dialogs.Confirm(e.Win, lang.L("Restore shipped defaults"),
 			lang.L("Your saved standard will be replaced with the shipped defaults."),
 			func() {
-				putDefaultI(e, api.ISettings{}, lang.L("Shipped defaults restored"))
+				defaultIAction(e, lang.L("Shipped defaults restored"), e.Backend.DeleteDefaultISettings)
 			})
 	})
 	iBox.Add(container.NewHBox(saveStandard, restoreStandard))
@@ -203,12 +203,13 @@ func collectISettings(iEntries []*widget.Entry) (api.ISettings, []string) {
 	return settings, problems
 }
 
-// saveAsStandard makes the five fields the operator's own standard: the
-// whole saved set is replaced by what they hold, and an empty field leaves
-// the shipped default in place. Nothing is sent until the values pass the
-// same rules the dialog's confirm applies, and a row where nothing is typed
-// is a warning rather than a PUT - blank fields must not silently wipe what
-// was saved.
+// saveAsStandard sends the five fields the operator filled in as their own
+// standard: the backend merges them into the saved set key by key, so a
+// field left empty holds no opinion and the value already saved under it -
+// or the shipped default, when nothing was ever saved there - stays. Nothing
+// is sent until the values pass the same rules the dialog's confirm applies,
+// and a row where nothing is typed is a warning rather than a PUT - blank
+// fields must not even look like an offer to wipe what was saved.
 func saveAsStandard(e *env.Env, iEntries []*widget.Entry) {
 	settings, problems := collectISettings(iEntries)
 	if len(problems) > 0 {
@@ -219,16 +220,18 @@ func saveAsStandard(e *env.Env, iEntries []*widget.Entry) {
 		e.Notify.Warn(lang.L("All five I1-I5 fields are empty - type the values to save, or use \"Restore shipped defaults\" to clear the saved standard"))
 		return
 	}
-	putDefaultI(e, settings, lang.L("Standard I-settings saved"))
+	defaultIAction(e, lang.L("Standard I-settings saved"), func() error {
+		return e.Backend.PutDefaultISettings(settings)
+	})
 }
 
-// putDefaultI replaces the saved standard and, once the backend confirms,
-// refreshes the cached effective set so the next dialog opens with the new
-// placeholders. The request runs off the UI goroutine; the notifier and the
-// refresh are safe from any.
-func putDefaultI(e *env.Env, settings api.ISettings, done string) {
+// defaultIAction runs one write of the saved standard off the UI goroutine
+// and, once the backend confirms, refreshes the cached effective set so the
+// next dialog opens with the new placeholders. The notifier and the refresh
+// are safe from any goroutine.
+func defaultIAction(e *env.Env, done string, action func() error) {
 	go func() {
-		if err := e.Backend.PutDefaultISettings(settings); err != nil {
+		if err := action(); err != nil {
 			e.Notify.Fail(err)
 			return
 		}

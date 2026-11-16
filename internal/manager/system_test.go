@@ -48,24 +48,41 @@ func TestDefaultISettingsLayersTheSavedSetOverTheShippedOne(t *testing.T) {
 	}
 }
 
-// An update replaces the saved set rather than merging into it, a set the
-// shared rules reject changes nothing, and an empty set clears back to the
-// shipped defaults.
-func TestUpdateDefaultISettingsReplacesRejectsAndClears(t *testing.T) {
+// An update merges into the saved standard key by key: only the keys it
+// fills in change, a key it leaves out or sends empty keeps its saved state,
+// and a key nobody ever saved stays "no override" so the shipped value stays
+// live underneath. This is the partial-save guard: typing only I2 used to
+// wipe the saved I1 back to the shipped default. A set the shared rules
+// reject and a request with nothing filled in both change nothing; the one
+// explicit full clear is ClearDefaultISettings.
+func TestUpdateDefaultISettingsMergesIntoTheSavedStandard(t *testing.T) {
 	m, _ := newTestManager(t)
 
 	if _, err := m.UpdateDefaultISettings(api.ISettings{"i1": "<b 0xaabb>"}); err != nil {
 		t.Fatalf("first save: %v", err)
 	}
+
+	// The dialog's partial save: only I2 is typed this time. The saved I1
+	// must survive it, and I3 - never saved by anyone - must stay "no
+	// override": the effective set keeps showing the shipped value there.
 	if _, err := m.UpdateDefaultISettings(api.ISettings{"i2": "<r 20>"}); err != nil {
-		t.Fatalf("replace: %v", err)
+		t.Fatalf("partial save: %v", err)
 	}
 	got := m.DefaultISettings()
-	if got["i1"] != wgconf.DefaultI1 {
-		t.Errorf("i1 = %q, want the shipped value back: the update replaces, not merges", got["i1"])
+	if got["i1"] != "<b 0xaabb>" {
+		t.Errorf("i1 = %q, want the earlier saved value kept by the partial save", got["i1"])
 	}
 	if got["i2"] != "<r 20>" {
 		t.Errorf("i2 = %q, want the newly saved value", got["i2"])
+	}
+	if got["i3"] != wgconf.DefaultI3 {
+		t.Errorf("i3 = %q, want the shipped %q: a key nobody saved keeps no override", got["i3"], wgconf.DefaultI3)
+	}
+	m.mu.RLock()
+	_, i3Saved := m.cfg.DefaultISettings["i3"]
+	m.mu.RUnlock()
+	if i3Saved {
+		t.Error("i3 landed in the saved set although no save filled it in")
 	}
 
 	// The same shared rules the form and the client-update path use: a
@@ -74,37 +91,78 @@ func TestUpdateDefaultISettingsReplacesRejectsAndClears(t *testing.T) {
 	if _, err := m.UpdateDefaultISettings(api.ISettings{"i2": "<b 0xabc>"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("malformed set: want ErrInvalid, got %v", err)
 	}
-	if got := m.DefaultISettings(); got["i2"] != "<r 20>" {
-		t.Errorf("after the rejection i2 = %q, want the saved value untouched", got["i2"])
+	if got := m.DefaultISettings(); got["i1"] != "<b 0xaabb>" || got["i2"] != "<r 20>" {
+		t.Errorf("after the rejection i1 = %q, i2 = %q, want both saved values untouched", got["i1"], got["i2"])
 	}
 
-	// A stray key is not one of I1-I5 and never reaches the stored set, and
-	// a whitespace-only value is the emptiness the shared rules already
-	// treat it as - neither can end up as an override.
-	if _, err := m.UpdateDefaultISettings(api.ISettings{"i1": "<b 0xaabb>", "i6": "<r 20>"}); err != nil {
+	// A stray key is not one of I1-I5 and never reaches the stored set, but
+	// the valid keys next to it still save.
+	if _, err := m.UpdateDefaultISettings(api.ISettings{"i1": "<b 0xccdd>", "i6": "<r 20>"}); err != nil {
 		t.Fatalf("stray key: %v", err)
 	}
-	got = m.DefaultISettings()
-	if got["i1"] != "<b 0xaabb>" || len(got) != 5 {
+	m.mu.RLock()
+	_, i6Saved := m.cfg.DefaultISettings["i6"]
+	m.mu.RUnlock()
+	if i6Saved {
+		t.Error("stray key i6 reached the saved set")
+	}
+	if got := m.DefaultISettings(); got["i1"] != "<b 0xccdd>" || len(got) != 5 {
 		t.Errorf("effective set = %v, want the five I1-I5 keys with the saved i1", got)
 	}
-	if _, err := m.UpdateDefaultISettings(api.ISettings{"i1": "   "}); err != nil {
-		t.Fatalf("whitespace-only: %v", err)
-	}
-	if got := m.DefaultISettings(); got["i1"] != wgconf.DefaultI1 {
-		t.Errorf("whitespace-only i1 = %q, want it treated as empty and cleared", got["i1"])
-	}
 
-	// Empty clears: the shipped defaults stand again.
-	if _, err := m.UpdateDefaultISettings(api.ISettings{}); err != nil {
+	// An empty value is "no opinion": a whitespace-only value and an
+	// all-empty request both leave the saved set exactly as it stood -
+	// neither is a way to drop a saved override.
+	for _, empty := range []struct {
+		name string
+		body api.ISettings
+	}{
+		{"whitespace-only", api.ISettings{"i1": "   "}},
+		{"all-empty", api.ISettings{}},
+	} {
+		if _, err := m.UpdateDefaultISettings(empty.body); err != nil {
+			t.Fatalf("%s: %v", empty.name, err)
+		}
+		if got := m.DefaultISettings(); got["i1"] != "<b 0xccdd>" || got["i2"] != "<r 20>" {
+			t.Errorf("after the %s request i1 = %q, i2 = %q, want both saved values kept", empty.name, got["i1"], got["i2"])
+		}
+	}
+}
+
+// The one explicit full clear: the saved standard leaves and the shipped
+// defaults stand again - across a restart as well, since the clear is
+// persisted like any other change. Clearing an already-clear set changes
+// nothing.
+func TestClearDefaultISettingsRestoresTheShippedOnes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "web_config.json")
+	st := store.New(path)
+	settings := config.Settings{ConfigFile: path}
+	m := New(settings, st, awg.New(awgtest.New()))
+
+	if _, err := m.UpdateDefaultISettings(api.ISettings{"i1": "<b 0xaabb>", "i2": "<r 20>"}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err := m.ClearDefaultISettings(); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
-	got = m.DefaultISettings()
+
 	want := shippedISettings()
-	for key := range want {
-		if got[key] != want[key] {
-			t.Errorf("after clear %s = %q, want the shipped %q", key, got[key], want[key])
+	checkShipped := func(where string, got api.ISettings) {
+		t.Helper()
+		for key := range want {
+			if got[key] != want[key] {
+				t.Errorf("%s: %s = %q, want the shipped %q", where, key, got[key], want[key])
+			}
 		}
+	}
+	checkShipped("after the clear", m.DefaultISettings())
+	checkShipped("after a restart", New(settings, st, awg.New(awgtest.New())).DefaultISettings())
+
+	if saved := st.Load().DefaultISettings; len(saved) != 0 {
+		t.Errorf("saved set on disk = %v, want it empty after the clear", saved)
+	}
+	if _, err := m.ClearDefaultISettings(); err != nil {
+		t.Errorf("clearing an already-clear set: %v", err)
 	}
 }
 

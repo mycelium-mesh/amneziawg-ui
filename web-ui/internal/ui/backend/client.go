@@ -231,15 +231,25 @@ func (b *Client) DefaultISettings() (api.ISettings, error) {
 	return out, b.get(apiBase+"/default-i-settings", &out)
 }
 
-// PutDefaultISettings replaces the operator's saved standard I1-I5 set; an
-// empty set clears it back to the shipped defaults. The 200 answer carries
-// the effective set in GET's shape - the caller re-reads it through
-// DefaultISettings rather than parsing two shapes here.
+// PutDefaultISettings merges the operator's update into the saved standard
+// I1-I5 set: only keys sent with a non-empty value change, the rest keep
+// their saved state (an untouched field is simply left out). An empty set
+// is "no opinion" and changes nothing; DeleteDefaultISettings is the full
+// clear. The 200 answer carries the effective set in GET's shape - the
+// caller re-reads it through DefaultISettings rather than parsing two
+// shapes here.
 func (b *Client) PutDefaultISettings(settings api.ISettings) error {
 	if settings == nil {
 		settings = api.ISettings{}
 	}
 	return b.put(apiBase+"/default-i-settings", settings, nil)
+}
+
+// DeleteDefaultISettings drops the saved standard entirely - the shipped
+// defaults stand again. It is the counterpart to PutDefaultISettings' merge,
+// not an empty merge: clearing is an explicit action of its own.
+func (b *Client) DeleteDefaultISettings() error {
+	return b.del(apiBase + "/default-i-settings")
 }
 
 // ClientConfigURL is the download endpoint for a client .conf file.
