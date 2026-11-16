@@ -145,12 +145,13 @@ func quickFailure(err error) error {
 }
 
 // SyncConf pushes the interface's .conf onto the running interface, so
-// existing peers keep their sessions. When the interface rejects the
-// settings, that promise has an exception: the interface is brought down
-// and back up with the current .conf - on the kernel where it takes the
-// config, on the userspace engine where it refuses - so the edit lands;
-// peers reconnect, and a genuinely broken config leaves the server down
-// instead of running with the stale settings.
+// existing peers keep their sessions. Only a failure configRefusal
+// positively identifies as a configuration being refused restarts the
+// interface: down and back up with the current .conf, on the kernel where
+// it takes the config, on the userspace engine where it refuses - a
+// genuinely broken config leaves the server down rather than on the stale
+// settings. Any other failure returns as the sync error with the
+// interface left running.
 func (t *Tools) SyncConf(iface string) error {
 	unlock := t.lockInterface(iface)
 	defer unlock()
@@ -159,6 +160,9 @@ func (t *Tools) SyncConf(iface string) error {
 	if syncErr == nil {
 		return nil
 	}
+	if !configRefusal(syncErr) {
+		return fmt.Errorf("awg syncconf %s: %w", iface, quickFailure(syncErr))
+	}
 	if err := t.quickDown(iface); err != nil {
 		return fmt.Errorf("awg syncconf %s: %w; restart failed bringing the interface down: %w", iface, syncErr, err)
 	}
@@ -166,6 +170,37 @@ func (t *Tools) SyncConf(iface string) error {
 		return fmt.Errorf("awg syncconf %s: %w; restart failed: %w", iface, syncErr, err)
 	}
 	return nil
+}
+
+// configRefusal positively identifies an awg syncconf failure as the
+// configuration being refused - the only class that earns the disruptive
+// restart. Parse-level signatures are verbatim from the pinned
+// amneziawg-tools (AWG_TOOLS_VERSION): "Line unrecognized" from
+// config.c:617, "Configuration parsing error" from setconf.c:126 and
+// "Invalid configuration" from setconf.c:132. The apply refusal is
+// setconf.c:144's perror "Unable to modify interface: <strerror>" with
+// ipc.c:70 turning the device's errno into that strerror; its tails are
+// musl's strerror texts as the pinned image's libc prints them (English,
+// __strerror.h lines 49/85/83), case-folded, plus glibc's "Operation not
+// supported" for EOPNOTSUPP. A localized or unrecognized strerror, the get
+// failure at setconf.c:44, a non-ExitError, or any other stderr shape is
+// not identified: unknown means no restart.
+func configRefusal(err error) bool {
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	stderr := exitErr.Stderr
+	if strings.Contains(stderr, "Line unrecognized: `") ||
+		strings.Contains(stderr, "Configuration parsing error") ||
+		strings.Contains(stderr, "Invalid configuration") {
+		return true
+	}
+	low := strings.ToLower(stderr)
+	return strings.Contains(low, "unable to modify interface: invalid argument") ||
+		strings.Contains(low, "unable to modify interface: operation not supported") ||
+		strings.Contains(low, "unable to modify interface: not supported") ||
+		strings.Contains(low, "unable to modify interface: protocol not supported")
 }
 
 // InterfaceUp reports whether the kernel has the interface. It shells out,

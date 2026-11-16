@@ -33,7 +33,7 @@ func (r *scriptedRunner) Run(command string) (string, error) {
 		<-r.release
 	}
 	if r.failOn != "" && strings.Contains(command, r.failOn) {
-		return "", &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "refused"}
+		return "", &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "Unable to modify interface: invalid argument"}
 	}
 	return "", nil
 }

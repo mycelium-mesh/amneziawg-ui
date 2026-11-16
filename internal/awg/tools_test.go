@@ -134,7 +134,7 @@ func TestIPTablesScriptsAreSkippedWhenNotDeployed(t *testing.T) {
 func TestQuickUpRetriesOnTheUserspaceEngineWhenTheKernelRejectsTheConfig(t *testing.T) {
 	kernelRejected := "[#] ip link add wg-1 type amneziawg\n" +
 		"[#] awg setconf wg-1 /dev/fd/63\n" +
-		"Unable to set interface wg-1 config: invalid argument\n" +
+		"Unable to modify interface: invalid argument\n" +
 		"[#] ip link delete dev wg-1"
 	forced := "WG_QUICK_FORCE_USERSPACE=1 /usr/bin/awg-quick up wg-1"
 	run := awgtest.New().
@@ -167,13 +167,13 @@ func TestQuickUpStopsAtTheFirstSuccessfulStart(t *testing.T) {
 // the reason the deployment would have seen before the retry existed, and the
 // retry cannot add a better one.
 func TestQuickUpReportsTheFirstFailureWhenTheUserspaceRetryFails(t *testing.T) {
-	kernelRejected := &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "[#] awg setconf wg-1 /dev/fd/63\nUnable to set interface wg-1 config: invalid argument"}
+	kernelRejected := &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "[#] awg setconf wg-1 /dev/fd/63\nUnable to modify interface: invalid argument"}
 	run := awgtest.New().
 		Fail("/usr/bin/awg-quick up", kernelRejected).
 		Fail("WG_QUICK_FORCE_USERSPACE=1 /usr/bin/awg-quick up", errors.New("no such container-side engine"))
 
 	err := awg.New(run).QuickUp("wg-1")
-	want := "awg-quick up wg-1: exit status 1: Unable to set interface wg-1 config: invalid argument"
+	want := "awg-quick up wg-1: exit status 1: Unable to modify interface: invalid argument"
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %q, want %q", err, want)
 	}
@@ -185,8 +185,8 @@ func TestQuickUpReportsTheFirstFailureWhenTheUserspaceRetryFails(t *testing.T) {
 // up (the kernel refuses), then QuickUp's forced userspace retry - and that
 // retry's success is the result.
 func TestSyncConfRejectedRestartsOnTheUserspaceEngine(t *testing.T) {
-	rejected := &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "Unable to set interface wg-1 config: invalid argument"}
-	kernelRefused := &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "Unable to set interface wg-1 config: invalid argument"}
+	rejected := &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "Unable to modify interface: invalid argument"}
+	kernelRefused := &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "Unable to modify interface: invalid argument"}
 	forced := "WG_QUICK_FORCE_USERSPACE=1 /usr/bin/awg-quick up wg-1"
 	run := awgtest.New().
 		Fail("bash -c 'awg syncconf wg-1", rejected).
@@ -214,21 +214,74 @@ func TestSyncConfRejectedRestartsOnTheUserspaceEngine(t *testing.T) {
 	}
 }
 
-// A syncconf failure that is not the interface refusing the settings: the
-// restart's up is taken on the first, kernel attempt, and no forced
-// userspace attempt replaces a kernel path that works.
-func TestSyncConfRestartKeepsTheKernelPathWhenTheUpIsTaken(t *testing.T) {
-	transient := &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "Device or resource busy"}
-	run := awgtest.New().
-		Fail("bash -c 'awg syncconf wg-1", transient).
-		Stub("/usr/bin/awg-quick down wg-1", "").
-		Stub("/usr/bin/awg-quick up wg-1", "")
+// The canonical old-module semantic - the running interface reports the
+// 3.x settings or features unsupported - restarts like any other refusal;
+// each apply tail the classifier counts gets its own run, mirroring the
+// rejection test's chain.
+func TestSyncConfRestartsWhenTheInterfaceReportsUnsupportedFeatures(t *testing.T) {
+	for _, tail := range []string{"operation not supported", "not supported", "protocol not supported"} {
+		t.Run(tail, func(t *testing.T) {
+			refused := &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "Unable to modify interface: " + tail}
+			forced := "WG_QUICK_FORCE_USERSPACE=1 /usr/bin/awg-quick up wg-1"
+			run := awgtest.New().
+				Fail("bash -c 'awg syncconf wg-1", refused).
+				Stub("/usr/bin/awg-quick down wg-1", "").
+				Fail("/usr/bin/awg-quick up wg-1", refused).
+				Stub(forced, "")
 
-	if err := awg.New(run).SyncConf("wg-1"); err != nil {
-		t.Fatalf("SyncConf = %q, want nil after the restart", err)
+			err := awg.New(run).SyncConf("wg-1")
+			if err != nil {
+				t.Fatalf("SyncConf = %q, want nil after the restart", err)
+			}
+			want := []string{
+				"bash -c 'awg syncconf wg-1 <(awg-quick strip wg-1)'",
+				"/usr/bin/awg-quick down wg-1",
+				"/usr/bin/awg-quick up wg-1",
+				forced,
+			}
+			if len(run.Commands) != len(want) {
+				t.Fatalf("commands = %v, want %v", run.Commands, want)
+			}
+			for i := range want {
+				if run.Commands[i] != want[i] {
+					t.Errorf("command %d = %q, want %q", i, run.Commands[i], want[i])
+				}
+			}
+		})
 	}
-	if len(run.Commands) != 3 || run.Commands[2] != "/usr/bin/awg-quick up wg-1" {
-		t.Fatalf("commands = %v, want syncconf, down and the plain up alone", run.Commands)
+}
+
+// An infrastructural failure - a busy device, not a refusal of the
+// settings - leaves the interface exactly as it was: the sync error comes
+// back naming the failure, and not one restart command runs.
+func TestSyncConfInfrastructuralFailureLeavesTheInterfaceRunning(t *testing.T) {
+	busy := &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "Device or resource busy"}
+	run := awgtest.New().Fail("bash -c 'awg syncconf wg-1", busy)
+
+	err := awg.New(run).SyncConf("wg-1")
+	want := "awg syncconf wg-1: exit status 1: Device or resource busy"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %q, want %q", err, want)
+	}
+	if len(run.Commands) != 1 {
+		t.Errorf("commands = %v, want the syncconf alone, interface untouched", run.Commands)
+	}
+}
+
+// An error shape no signature positively matches cannot be called a
+// refusal: the conservative default is no restart - pre-change behavior,
+// interface still running, sessions kept.
+func TestSyncConfUnknownFailureDoesNotRestart(t *testing.T) {
+	spawn := errors.New("exec: bash: executable file not found in $PATH")
+	run := awgtest.New().Fail("bash -c 'awg syncconf wg-1", spawn)
+
+	err := awg.New(run).SyncConf("wg-1")
+	want := "awg syncconf wg-1: exec: bash: executable file not found in $PATH"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %q, want %q", err, want)
+	}
+	if len(run.Commands) != 1 {
+		t.Errorf("commands = %v, want the syncconf alone, interface untouched", run.Commands)
 	}
 }
 
@@ -249,8 +302,8 @@ func TestSyncConfAcceptedIsExactlyOneCommand(t *testing.T) {
 // - the settings did not land, and the server is down. The restart runs
 // QuickUp, so its own error - kernel attempt first - is what is named.
 func TestSyncConfReportsTheApplyAndTheFailedRestart(t *testing.T) {
-	rejected := &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "Unable to set interface wg-1 config: invalid argument"}
-	kernelRefused := &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "[#] awg setconf wg-1 /dev/fd/63\nUnable to set interface wg-1 config: invalid argument\n[#] ip link delete dev wg-1"}
+	rejected := &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "Unable to modify interface: invalid argument"}
+	kernelRefused := &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "[#] awg setconf wg-1 /dev/fd/63\nUnable to modify interface: invalid argument\n[#] ip link delete dev wg-1"}
 	userspaceAlsoRefused := &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "[#] awg setconf wg-1 /dev/fd/63\nLine unrecognized: `BogusKey=42'\nConfiguration parsing error\n[#] ip link delete dev wg-1"}
 	run := awgtest.New().
 		Fail("bash -c 'awg syncconf wg-1", rejected).
@@ -259,9 +312,9 @@ func TestSyncConfReportsTheApplyAndTheFailedRestart(t *testing.T) {
 		Fail("WG_QUICK_FORCE_USERSPACE=1 /usr/bin/awg-quick up", userspaceAlsoRefused)
 
 	err := awg.New(run).SyncConf("wg-1")
-	want := "awg syncconf wg-1: exit status 1: Unable to set interface wg-1 config: invalid argument" +
+	want := "awg syncconf wg-1: exit status 1: Unable to modify interface: invalid argument" +
 		"; restart failed: awg-quick up wg-1: exit status 1:" +
-		" Unable to set interface wg-1 config: invalid argument"
+		" Unable to modify interface: invalid argument"
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %q, want %q", err, want)
 	}
@@ -270,14 +323,14 @@ func TestSyncConfReportsTheApplyAndTheFailedRestart(t *testing.T) {
 // The interface cannot even be brought down: no up follows, and the error
 // says both what failed to apply and where the restart stopped.
 func TestSyncConfReportsWhenTheRestartCannotBringTheInterfaceDown(t *testing.T) {
-	rejected := &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "Unable to set interface wg-1 config: invalid argument"}
+	rejected := &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "Unable to modify interface: invalid argument"}
 	downFailed := &awg.ExitError{Err: errors.New("exit status 1"), Stderr: "Device or resource busy"}
 	run := awgtest.New().
 		Fail("bash -c 'awg syncconf wg-1", rejected).
 		Fail("/usr/bin/awg-quick down wg-1", downFailed)
 
 	err := awg.New(run).SyncConf("wg-1")
-	want := "awg syncconf wg-1: exit status 1: Unable to set interface wg-1 config: invalid argument" +
+	want := "awg syncconf wg-1: exit status 1: Unable to modify interface: invalid argument" +
 		"; restart failed bringing the interface down: awg-quick down wg-1: exit status 1: Device or resource busy"
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %q, want %q", err, want)
