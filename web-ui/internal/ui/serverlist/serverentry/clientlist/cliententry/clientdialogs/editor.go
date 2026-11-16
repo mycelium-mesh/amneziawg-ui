@@ -44,7 +44,7 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 	for i, entry := range iEntries {
 		key := fmt.Sprintf("i%d", i+1)
 		if value := defaults[key]; value != "" {
-			entry.SetPlaceHolder(lang.L("server default: {{.Value}}", map[string]any{"Value": widgets.Truncate(value, 40)}))
+			entry.SetPlaceHolder(lang.L("standard: {{.Value}}", map[string]any{"Value": widgets.Truncate(value, 40)}))
 		} else {
 			entry.SetPlaceHolder(lang.L("leave empty to skip"))
 		}
@@ -67,6 +67,16 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 		name.SetPlaceHolder(lang.L("New Client"))
 	}
 
+	// What each I-field held once the dialog was filled in: the edit form
+	// opens with the client's own record, the add form with nothing.
+	// "Save as my standard" writes only what has changed since, so an
+	// untouched pre-filled value never leaks into the standard, while in
+	// the add form every typed value counts as changed.
+	opened := make([]string, len(iEntries))
+	for i, entry := range iEntries {
+		opened[i] = strings.TrimSpace(entry.Text)
+	}
+
 	iBox := container.NewVBox()
 	for i, entry := range iEntries {
 		iBox.Add(widgets.Labeled(fmt.Sprintf("I%d", i+1), entry))
@@ -75,7 +85,7 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 	// per client, kept once as what every new client starts from. Both
 	// buttons live inside iBox, so they appear and vanish with the checkbox.
 	saveStandard := widgets.NewButton(lang.L("Save as my standard"), theme.DocumentSaveIcon(), func() {
-		saveAsStandard(e, iEntries)
+		saveAsStandard(e, iEntries, opened)
 	})
 	restoreStandard := widgets.NewButton(lang.L("Restore shipped defaults"), theme.ContentUndoIcon(), func() {
 		dialogs.Confirm(e.Win, lang.L("Restore shipped defaults"),
@@ -156,7 +166,7 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 			}
 		}
 
-		settings, iProblems := collectISettings(iEntries)
+		settings, iProblems := collectISettings(iEntries, nil)
 		// Only worth checking what will actually be written: with the box
 		// unticked the values are kept but never reach a config.
 		if applyI.Checked {
@@ -183,14 +193,18 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 
 // collectISettings reads the five I-fields the way every action in this
 // dialog treats them: trimmed, an empty value skipped as "no opinion", and
-// the rest checked with the shared key loop. It returns the values that
-// would be written and the problems found in the others.
-func collectISettings(iEntries []*widget.Entry) (api.ISettings, []string) {
+// the rest checked with the shared key loop. changedFrom, when not nil, is
+// what each field held when the dialog was filled in - only fields whose
+// value differs from it are collected, so the dialog's confirm (nil: every
+// field as it stands) and the standard's save (only what changed) stay one
+// rule. It returns the values that would be written and the problems found
+// in the others.
+func collectISettings(iEntries []*widget.Entry, changedFrom []string) (api.ISettings, []string) {
 	settings := api.ISettings{}
 	var problems []string
 	for i, entry := range iEntries {
 		value := strings.TrimSpace(entry.Text)
-		if value == "" {
+		if value == "" || (changedFrom != nil && value == changedFrom[i]) {
 			continue
 		}
 		key := fmt.Sprintf("I%d", i+1)
@@ -203,21 +217,23 @@ func collectISettings(iEntries []*widget.Entry) (api.ISettings, []string) {
 	return settings, problems
 }
 
-// saveAsStandard sends the five fields the operator filled in as their own
-// standard: the backend merges them into the saved set key by key, so a
-// field left empty holds no opinion and the value already saved under it -
-// or the shipped default, when nothing was ever saved there - stays. Nothing
-// is sent until the values pass the same rules the dialog's confirm applies,
-// and a row where nothing is typed is a warning rather than a PUT - blank
-// fields must not even look like an offer to wipe what was saved.
-func saveAsStandard(e *env.Env, iEntries []*widget.Entry) {
-	settings, problems := collectISettings(iEntries)
+// saveAsStandard sends the fields the operator changed since the dialog
+// opened as their own standard: the backend merges them into the saved set
+// key by key, so a field that still holds what the dialog opened with - and
+// an emptied one - holds no opinion and the value already saved under its
+// key (or the shipped default, when nothing was ever saved there) stays.
+// Nothing is sent until the changed values pass the same rules the dialog's
+// confirm applies, and a save where nothing changed is a warning rather
+// than a PUT - untouched or blank fields must not even look like an offer
+// to wipe what was saved.
+func saveAsStandard(e *env.Env, iEntries []*widget.Entry, opened []string) {
+	settings, problems := collectISettings(iEntries, opened)
 	if len(problems) > 0 {
 		e.Notify.Fail(errors.New(strings.Join(problems, "\n")))
 		return
 	}
 	if len(settings) == 0 {
-		e.Notify.Warn(lang.L("All five I1-I5 fields are empty - type the values to save, or use \"Restore shipped defaults\" to clear the saved standard"))
+		e.Notify.Warn(lang.L("Nothing changed in the I1-I5 fields - type the values to save, or use \"Restore shipped defaults\" to clear the saved standard"))
 		return
 	}
 	defaultIAction(e, lang.L("Standard I-settings saved"), func() error {
