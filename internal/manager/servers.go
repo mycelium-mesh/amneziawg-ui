@@ -357,19 +357,26 @@ func (m *Manager) subnetInUse(subnet string) (string, bool) {
 	return "", false
 }
 
-// DeleteServer stops and removes a server and its clients.
+// DeleteServer stops and removes a server and its clients. The whole
+// decision - the running check, the stop it may need, the removal - runs
+// under the interface's flow lock (lockFlow): a start racing a delete then
+// runs entirely before or after it, so no interface can come up with the
+// firewall rules of a server that is gone.
 func (m *Manager) DeleteServer(serverID string) error {
 	srv, ok := m.Server(serverID)
 	if !ok {
 		return serverNotFound(serverID)
 	}
 
+	unlock := m.lockFlow(srv.Interface)
+	defer unlock()
+
 	// The stored Status is only the last observation; the interface may have
 	// been brought up or down since - including by a restart of this process
 	// - and deleting a server whose interface is still up would leave it and
 	// its iptables rules behind.
 	if m.serverStatus(srv.Interface) == "running" {
-		if err := m.StopServer(serverID); err != nil {
+		if err := m.stopServer(&srv); err != nil {
 			return fmt.Errorf("stopping the server first: %w", err)
 		}
 	}
@@ -449,8 +456,16 @@ func (m *Manager) StopServer(serverID string) error {
 	unlock := m.lockFlow(srv.Interface)
 	defer unlock()
 
+	return m.stopServer(&srv)
+}
+
+// stopServer is StopServer's teardown with the interface's flow lock already
+// held by the caller. The lock is not reentrant, so only entry points take
+// it; DeleteServer reuses this inner form to keep its decision, the stop it
+// may need, and the removal one critical section.
+func (m *Manager) stopServer(srv *api.Server) error {
 	if m.serverStatus(srv.Interface) != "running" {
-		return fmt.Errorf("server %s is not running: %w", serverID, ErrConflict)
+		return fmt.Errorf("server %s is not running: %w", srv.ID, ErrConflict)
 	}
 
 	m.tools.CleanupIPTables(srv.Interface, srv.Subnet)
@@ -460,7 +475,7 @@ func (m *Manager) StopServer(serverID string) error {
 		return err
 	}
 
-	m.setServerStatus(serverID, "stopped")
+	m.setServerStatus(srv.ID, "stopped")
 	m.noteServerStatus(srv.Interface, "stopped")
 	m.saveOrLog("server stop")
 

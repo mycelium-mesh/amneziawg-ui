@@ -103,6 +103,64 @@ func deployScripts(t *testing.T, m *Manager) {
 	m.tools.ScriptsDir = dir
 }
 
+// The delete is the same critical section as the rest of issue #31's family:
+// its running-check decision, the stop that may follow and the removal are
+// one flow on the interface, so a start racing a delete runs entirely before
+// or after it. The hazard this pins: a start completing behind a delete that
+// already decided "stopped" must never leave a running interface with the
+// firewall rules of a server that no longer exists.
+func TestDeleteDoesNotInterleaveWithAStartOnOneServer(t *testing.T) {
+	run := newFlowRunner("ip link show")
+	run.up = false // the interface is down: the delete's decision would skip the stop
+	m := newTestManagerWith(t, run)
+	deployScripts(t, m)
+
+	startDone := make(chan error, 1)
+	go func() { startDone <- m.StartServer("s1") }()
+	select {
+	case <-run.entered: // the start is mid-flow, inside its status check
+	case <-time.After(2 * time.Second):
+		t.Fatal("the start never reached its status check")
+	}
+
+	deleteDone := make(chan error, 1)
+	deleteRan := false
+	go func() { deleteDone <- m.DeleteServer("s1") }()
+	select {
+	case err := <-deleteDone:
+		deleteRan = true
+		t.Errorf("the delete ran its whole decision and removal while the start was in flight: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	run.release <- struct{}{}
+	select {
+	case err := <-startDone:
+		if err != nil {
+			t.Errorf("StartServer = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the start never finished")
+	}
+	if !deleteRan {
+		select {
+		case err := <-deleteDone:
+			if err != nil {
+				t.Fatalf("DeleteServer = %v, want nil", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("the delete never finished after the start")
+		}
+	}
+
+	if _, ok := m.Server("s1"); ok {
+		t.Error("the server is still listed after the delete")
+	}
+	if up, rules := run.state(); up && rules {
+		t.Errorf("running interface with the firewall rules of a deleted server: commands=%v", run.recorded())
+	}
+}
+
 // The stop and the live apply are each a critical section on one server: a
 // stop arriving while the apply is in flight must not run a single host
 // command until the apply has finished - no cleanup under an apply that is

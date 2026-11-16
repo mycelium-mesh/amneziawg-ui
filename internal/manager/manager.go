@@ -45,21 +45,23 @@ type Manager struct {
 	statuses map[string]statusObservation
 	statusMu sync.Mutex
 
-	// flows serializes each interface's whole host flow - start, stop and
-	// live apply - so no two interleave on one server; see lockFlow.
-	// Guarded by flowsMu, which like statusMu is deliberately not mu: a
-	// flow lock is never taken with the config lock held, and the config
-	// lock is never taken while another flow waits on this one.
+	// flows serializes each interface's whole host flow - start, stop,
+	// live apply and delete - so no two interleave on one server; see
+	// lockFlow. Guarded by flowsMu, which like statusMu is deliberately not
+	// mu: a flow lock is never taken with the config lock held, and the
+	// config lock is never taken while another flow waits on this one.
 	flowsMu sync.Mutex
 	flows   map[string]*sync.Mutex
 }
 
 // lockFlow takes the interface's whole-flow lock and returns its unlock.
 // The host flows of one server - start (up + firewall setup), stop (firewall
-// cleanup + down) and the live apply - are critical sections per interface:
-// no part of one flow interleaves another on the same server, so a stop
-// cannot land between a start's up and its firewall rules, and an apply
-// cannot push a config against an interface a stop is tearing down.
+// cleanup + down), the live apply, and a delete (decision, stop if running,
+// removal) - are critical sections per interface: no part of one flow
+// interleaves another on the same server, so a stop cannot land between a
+// start's up and its firewall rules, an apply cannot push a config against
+// an interface a stop is tearing down, and a start cannot resurrect the
+// interface of a server a delete just removed.
 // Different interfaces stay independent: the registry mutex guards only the
 // map and is released before any flow lock is awaited, so nothing nests.
 //
