@@ -80,6 +80,8 @@ func New(a fyne.App, w fyne.Window) *UI {
 		Notify:   u.feedback,
 		Reload:   u.reloadServers,
 		DefaultI: u.defaultISettings,
+
+		RefreshDefaultI: u.loadDefaultISettings,
 	}
 	return u
 }

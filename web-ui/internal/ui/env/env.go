@@ -27,6 +27,11 @@ type Env struct {
 	// DefaultI is the I1-I5 set the backend gives a new client, as last
 	// reported by it. The client editor shows it as placeholders.
 	DefaultI func() api.ISettings
+
+	// RefreshDefaultI re-reads that set from the backend, for the actions
+	// that change it (saving or restoring the operator's standard), so the
+	// next dialog opens with the new placeholders. Safe from any goroutine.
+	RefreshDefaultI func()
 }
 
 // Notifier is the page's feedback channel: a transient note in the footer

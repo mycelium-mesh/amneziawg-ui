@@ -71,6 +71,20 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 	for i, entry := range iEntries {
 		iBox.Add(widgets.Labeled(fmt.Sprintf("I%d", i+1), entry))
 	}
+	// The operator's own standard: the same five values this dialog writes
+	// per client, kept once as what every new client starts from. Both
+	// buttons live inside iBox, so they appear and vanish with the checkbox.
+	saveStandard := widgets.NewButton(lang.L("Save as my standard"), theme.DocumentSaveIcon(), func() {
+		saveAsStandard(e, iEntries)
+	})
+	restoreStandard := widgets.NewButton(lang.L("Restore shipped defaults"), theme.ContentUndoIcon(), func() {
+		dialogs.Confirm(e.Win, lang.L("Restore shipped defaults"),
+			lang.L("Your saved standard will be replaced with the shipped defaults."),
+			func() {
+				putDefaultI(e, api.ISettings{}, lang.L("Shipped defaults restored"))
+			})
+	})
+	iBox.Add(container.NewHBox(saveStandard, restoreStandard))
 	iNote := widget.NewLabel(lang.L("Each value describes one packet sent before the handshake, as a sequence of tags: " +
 		"<b 0x...> static bytes, <t> a 4-byte timestamp, <r N> random bytes, <rc N> random letters, <rd N> random digits " +
 		"(N up to 1000). Example: <b 0xd100000001><rc 8><t><r 50>. These are client-only parameters, they are never " +
@@ -130,7 +144,6 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 	}
 
 	dialogs.ShowForm(e.Win, title, confirm, lang.L("Cancel"), dialogs.Scrolled(content), dialogs.Size(e.Win, 760, 620), func() bool {
-		settings := api.ISettings{}
 		var problems []string
 
 		// The name lands in a file name, so it is checked as it was typed:
@@ -143,19 +156,7 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 			}
 		}
 
-		var iProblems []string
-		for i, entry := range iEntries {
-			value := strings.TrimSpace(entry.Text)
-			if value == "" {
-				continue
-			}
-			key := fmt.Sprintf("I%d", i+1)
-			if problem := api.ValidateCPS(key, value); problem != "" {
-				iProblems = append(iProblems, problem)
-				continue
-			}
-			settings[strings.ToLower(key)] = value
-		}
+		settings, iProblems := collectISettings(iEntries)
 		// Only worth checking what will actually be written: with the box
 		// unticked the values are kept but never reach a config.
 		if applyI.Checked {
@@ -178,6 +179,62 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 		add(e, server, strings.TrimSpace(name.Text), routes, applyI.Checked, settings)
 		return true
 	})
+}
+
+// collectISettings reads the five I-fields the way every action in this
+// dialog treats them: trimmed, an empty value skipped as "no opinion", and
+// the rest checked with the shared key loop. It returns the values that
+// would be written and the problems found in the others.
+func collectISettings(iEntries []*widget.Entry) (api.ISettings, []string) {
+	settings := api.ISettings{}
+	var problems []string
+	for i, entry := range iEntries {
+		value := strings.TrimSpace(entry.Text)
+		if value == "" {
+			continue
+		}
+		key := fmt.Sprintf("I%d", i+1)
+		if problem := api.ValidateCPS(key, value); problem != "" {
+			problems = append(problems, problem)
+			continue
+		}
+		settings[strings.ToLower(key)] = value
+	}
+	return settings, problems
+}
+
+// saveAsStandard makes the five fields the operator's own standard: the
+// whole saved set is replaced by what they hold, and an empty field leaves
+// the shipped default in place. Nothing is sent until the values pass the
+// same rules the dialog's confirm applies, and a row where nothing is typed
+// is a warning rather than a PUT - blank fields must not silently wipe what
+// was saved.
+func saveAsStandard(e *env.Env, iEntries []*widget.Entry) {
+	settings, problems := collectISettings(iEntries)
+	if len(problems) > 0 {
+		e.Notify.Fail(errors.New(strings.Join(problems, "\n")))
+		return
+	}
+	if len(settings) == 0 {
+		e.Notify.Warn(lang.L("All five I1-I5 fields are empty - type the values to save, or use \"Restore shipped defaults\" to clear the saved standard"))
+		return
+	}
+	putDefaultI(e, settings, lang.L("Standard I-settings saved"))
+}
+
+// putDefaultI replaces the saved standard and, once the backend confirms,
+// refreshes the cached effective set so the next dialog opens with the new
+// placeholders. The request runs off the UI goroutine; the notifier and the
+// refresh are safe from any.
+func putDefaultI(e *env.Env, settings api.ISettings, done string) {
+	go func() {
+		if err := e.Backend.PutDefaultISettings(settings); err != nil {
+			e.Notify.Fail(err)
+			return
+		}
+		e.RefreshDefaultI()
+		e.Notify.OK(done)
+	}()
 }
 
 // pickSuspendTime opens a calendar over the editor and writes the chosen
