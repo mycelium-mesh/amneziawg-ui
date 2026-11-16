@@ -215,9 +215,10 @@ exit $s'`, iface)
 // in the form the pinned amneziawg-tools (AWG_TOOLS_VERSION) prints it:
 // stderr carries echoed config text as well - a .conf value embedding a
 // signature (SaveConfig = Invalid configuration) comes back inside
-// awg-quick's own echo, "<value>' is neither true nor false" (pinned
-// linux.bash:80, die() at :35-38 - "$PROGRAM: $*"), and no echo of config
-// content may classify itself.
+// awg-quick's own die line (pinned linux.bash:80, die() at :35-38 -
+// "$PROGRAM: $*"). The value sits between that line's fixed prefix and its
+// fixed tail: it satisfies the die's own form but can forge no other
+// signature, which each require their own whole line or line prefix.
 //
 // The signatures, all verbatim from the pinned tree:
 //
@@ -247,6 +248,20 @@ exit $s'`, iface)
 //	                                        environment variable - not the
 //	                                        configuration, and no restart can
 //	                                        fix it.
+//	"awg-quick: `<value>' is neither true nor false"
+//	                                    linux.bash:80 (read_bool, called
+//	                                    from parse_options' SaveConfig at
+//	                                    :68; die() :35-38 adds the
+//	                                    "$PROGRAM: " prefix, PROGRAM
+//	                                    :27), line prefix plus fixed tail
+//	                                    - the strip script's own death on
+//	                                    .conf content. The other
+//	                                    linux.bash dies mean environment
+//	                                    or state, not content, and stay
+//	                                    unidentified: file missing (:44),
+//	                                    interface naming (:45), write/move
+//	                                    of the file (:283/:285), interface
+//	                                    state (:328/:346/:356).
 //	"Unable to modify interface: <strerror>" setconf.c:144's perror with
 //	                                        ipc.c:70 turning the device's
 //	                                        errno into that strerror; its
@@ -260,8 +275,8 @@ exit $s'`, iface)
 //	                                        those tails.
 //
 // A localized or unrecognized strerror, the get failure at setconf.c:44, a
-// non-ExitError, an echoed value, or any other stderr shape is not
-// identified: unknown means no restart.
+// non-ExitError, an echoed value outside those fixed forms, or any other
+// stderr shape is not identified: unknown means no restart.
 func configRefusal(err error) bool {
 	var exitErr *ExitError
 	if !errors.As(err, &exitErr) {
@@ -274,6 +289,8 @@ func configRefusal(err error) bool {
 		case strings.HasPrefix(line, "Line unrecognized: `"),
 			line == "Configuration parsing error",
 			line == "Invalid configuration":
+			return true
+		case strings.HasPrefix(line, "awg-quick: `") && strings.HasSuffix(line, "' is neither true nor false"):
 			return true
 		case strings.HasPrefix(line, "Unable to parse WG_ENDPOINT_RESOLUTION_RETRIES: "):
 			// Same shape as the value-parser family, wrong class: an

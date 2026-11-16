@@ -103,6 +103,84 @@ func deployScripts(t *testing.T, m *Manager) {
 	m.tools.ScriptsDir = dir
 }
 
+// Review #10's start-vs-stop pair, double-fired: the two whole flows never
+// interleave, so no schedule ends with a stopped interface that still
+// carries firewall rules. The stop is fired while the start is paused
+// mid-flow (inside its up); the order oracle pins the start's rules landing
+// strictly before the stop's teardown strips them.
+func TestStartAndStopDoNotInterleaveOnOneServer(t *testing.T) {
+	run := newFlowRunner("awg-quick up")
+	run.up = false // down: the start brings it up, the stop takes it down
+	m := newTestManagerWith(t, run)
+	deployScripts(t, m)
+
+	startDone := make(chan error, 1)
+	go func() { startDone <- m.StartServer("s1") }()
+	select {
+	case <-run.entered: // the start is mid-flow, inside awg-quick up
+	case <-time.After(2 * time.Second):
+		t.Fatal("the start never reached its up")
+	}
+
+	stopDone := make(chan error, 1)
+	stopRan := false
+	var stopErr error
+	go func() { stopErr = m.StopServer("s1"); stopDone <- stopErr }()
+	select {
+	case err := <-stopDone:
+		stopRan = true
+		t.Errorf("the stop completed while the start was mid-flow: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	run.release <- struct{}{}
+	select {
+	case err := <-startDone:
+		if err != nil {
+			t.Errorf("StartServer = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the start never finished")
+	}
+	if !stopRan {
+		select {
+		case err := <-stopDone:
+			stopErr = err
+		case <-time.After(2 * time.Second):
+			t.Fatal("the stop never ran after the start")
+		}
+	}
+	if stopErr != nil {
+		t.Errorf("StopServer = %v, want nil after the start", stopErr)
+	}
+
+	got := run.recorded()
+	idxOf := func(fragment string) int {
+		for i, c := range got {
+			if strings.Contains(c, fragment) {
+				return i
+			}
+		}
+		return -1
+	}
+	setupIdx := idxOf("setup_iptables.sh")
+	cleanupIdx := idxOf("cleanup_iptables.sh")
+	downIdx := idxOf("awg-quick down")
+	if setupIdx < 0 {
+		t.Errorf("the start never laid down firewall rules: %v", got)
+	}
+	if cleanupIdx < 0 || downIdx < 0 {
+		t.Errorf("the stop never tore the interface down: %v", got)
+	}
+	if setupIdx >= 0 && cleanupIdx >= 0 && downIdx >= 0 &&
+		(setupIdx >= cleanupIdx || cleanupIdx >= downIdx) {
+		t.Errorf("the flows interleaved: setup@%d cleanup@%d down@%d: %v", setupIdx, cleanupIdx, downIdx, got)
+	}
+	if up, rules := run.state(); !up && rules {
+		t.Errorf("stopped interface with firewall rules left: %v", got)
+	}
+}
+
 // The delete is the same critical section as the rest of issue #31's family:
 // its running-check decision, the stop that may follow and the removal are
 // one flow on the interface, so a start racing a delete runs entirely before

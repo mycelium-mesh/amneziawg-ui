@@ -366,32 +366,6 @@ func TestSyncConfRestartsWhenAValueParserExitsMidRead(t *testing.T) {
 	}
 }
 
-// A signature echoed back inside config text is not a signature. Strip's own
-// read_bool (pinned linux.bash:80, die() at :35-38) echoes the raw value:
-// `SaveConfig = Invalid configuration` dies with
-// "awg-quick: `Invalid configuration' is neither true nor false" - whose
-// echo contains a substring the old whole-stderr match classified as a
-// refusal, restarting a live server on an unclassifiable shape. Anchored to
-// the tool messages' line forms, the echo matches nothing: the error comes
-// back and not one command beyond the apply runs.
-func TestSyncConfDoesNotRestartOnAnEchoedSignature(t *testing.T) {
-	stripDied := &awg.ExitError{
-		Err:    errors.New("exit status 1"),
-		Stderr: "awg-quick: `Invalid configuration' is neither true nor false",
-	}
-	run := awgtest.New().Fail(applyPrefix, stripDied)
-
-	err := awg.New(run).SyncConf("wg-1")
-	want := "awg syncconf wg-1: exit status 1:" +
-		" awg-quick: `Invalid configuration' is neither true nor false"
-	if err == nil || err.Error() != want {
-		t.Fatalf("err = %q, want %q", err, want)
-	}
-	if len(run.Commands) != 1 {
-		t.Errorf("commands = %v, want the apply alone, interface untouched", run.Commands)
-	}
-}
-
 // The classifier's named carve-out: "Unable to parse
 // WG_ENDPOINT_RESOLUTION_RETRIES: `<v>'" (pinned config.c:197) shares the
 // config-value family's exact message shape but parses an environment
@@ -414,6 +388,71 @@ func TestSyncConfDoesNotRestartOnAnEnvironmentVariableParseFailure(t *testing.T)
 	}
 	if len(run.Commands) != 1 {
 		t.Errorf("commands = %v, want the apply alone, interface untouched", run.Commands)
+	}
+}
+
+// The strip script's own death on .conf content is a parse refusal of the
+// .conf itself: read_bool (pinned linux.bash:80, called from parse_options'
+// SaveConfig at :68; die() :35-38 prefixes "$PROGRAM: ") dies on a value
+// that is neither true nor false. Under the parser-death decision that
+// earns the restart chain - and on a genuinely broken file the restart
+// fails with both failures named, so the server stops rather than
+// continuing on stale settings: the accepted consequence.
+func TestSyncConfRestartsWhenTheStripParserDiesOnTheConfig(t *testing.T) {
+	parseDied := &awg.ExitError{
+		Err:    errors.New("exit status 1"),
+		Stderr: "awg-quick: `maybe' is neither true nor false",
+	}
+	run := awgtest.New().
+		Fail(applyPrefix, parseDied).
+		Stub("/usr/bin/awg-quick down wg-1", "").
+		Fail("/usr/bin/awg-quick up wg-1", parseDied)
+
+	err := awg.New(run).SyncConf("wg-1")
+	want := "awg syncconf wg-1: exit status 1:" +
+		" awg-quick: `maybe' is neither true nor false" +
+		"; restart failed: awg-quick up wg-1: exit status 1:" +
+		" awg-quick: `maybe' is neither true nor false"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %q, want %q", err, want)
+	}
+	if len(run.Commands) != 4 {
+		t.Errorf("commands = %v, want the apply, the down and both up attempts of the restart", run.Commands)
+	}
+}
+
+// This scenario's purpose was injection safety: SaveConfig =
+// Invalid configuration comes back inside read_bool's die, echoing a value
+// that contains the separate whole-line signature. Under the parser-death
+// decision it IS a config refusal - pinned linux.bash:80 - so the
+// expectation flips to the restart chain. For this input the injection
+// distinction is behaviorally unobservable: the value sits between the
+// die's fixed prefix and fixed tail, so whether classification matched the
+// die's own shape or (hypothetically) a forged "Invalid configuration"
+// line, the observable outcome is this same restart. What the whole-line
+// anchor still guarantees elsewhere - a value echoed on any line that is
+// not one of the fixed forms satisfies no signature - stays covered by the
+// real-shell strip-failure test (no restart, one command).
+func TestSyncConfRestartsOnAnEchoedSignatureInsideAParseDeath(t *testing.T) {
+	stripDied := &awg.ExitError{
+		Err:    errors.New("exit status 1"),
+		Stderr: "awg-quick: `Invalid configuration' is neither true nor false",
+	}
+	run := awgtest.New().
+		Fail(applyPrefix, stripDied).
+		Stub("/usr/bin/awg-quick down wg-1", "").
+		Fail("/usr/bin/awg-quick up wg-1", stripDied)
+
+	err := awg.New(run).SyncConf("wg-1")
+	want := "awg syncconf wg-1: exit status 1:" +
+		" awg-quick: `Invalid configuration' is neither true nor false" +
+		"; restart failed: awg-quick up wg-1: exit status 1:" +
+		" awg-quick: `Invalid configuration' is neither true nor false"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %q, want %q", err, want)
+	}
+	if len(run.Commands) != 4 {
+		t.Errorf("commands = %v, want the apply, the down and both up attempts of the restart", run.Commands)
 	}
 }
 
