@@ -71,10 +71,12 @@ func (a *Assets) Mount(app *fiber.App) {
 
 // packedAssets maps a request path to the pre-compressed files that answer
 // it. "make web-ui" leaves the bundle uncompressed; the Docker build replaces
-// it with gzip and brotli copies - about 24 MB of layer instead of 49 - so no
-// cold request pays for compressing the same 49 MB again. A .br without its
-// .gz is not indexed: the gz copy answers the clients refusing brotli and the
-// ETag comes from it, so a half-packed tree behaves as an unpacked one.
+// the source with its gzip and brotli copies - two pre-compressed files and no
+// raw bundle in the layer - and an identity answer is inflated from the .gz,
+// its length read off the ISIZE footer, so no cold request pays for
+// compressing the same bundle again. A .br without its .gz is not indexed:
+// the gz copy answers the clients refusing brotli and the ETag comes from it,
+// so a half-packed tree behaves as an unpacked one.
 func packedAssets(files fs.FS, root string) map[string]packedAsset {
 	packed := map[string]packedAsset{}
 
@@ -282,8 +284,9 @@ func (g gzipFile) Close() error {
 // cache makes the browser revalidate the frontend instead of caching it
 // blindly. The file names are the same in every release, so without a
 // content-derived validator a browser would happily keep running the
-// previous bundle after an upgrade - and re-downloading ~50 MB of wasm on
-// every page load is not an acceptable alternative.
+// previous bundle after an upgrade - and re-downloading the whole
+// multi-megabyte wasm bundle on every page load is not an acceptable
+// alternative.
 func (a *Assets) cache() fiber.Handler {
 	tags := map[string]string{}
 
