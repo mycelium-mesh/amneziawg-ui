@@ -137,7 +137,9 @@ COPY --from=builder /app/api /usr/bin/api
 COPY --from=web /build/web-ui/wasm/ /app/web-ui/wasm/
 
 COPY scripts/ /app/scripts/
-RUN chmod +x /app/scripts/*.sh
+# The WG_QUICK_FORCE_USERSPACE override QuickUp's failed-start retry depends
+# on; scripts/patch-awg-quick.sh holds the rationale and its sanity checks.
+RUN chmod +x /app/scripts/*.sh && /app/scripts/patch-awg-quick.sh /usr/bin/awg-quick
 
 # The api binary resolves ./web-ui/wasm from here.
 WORKDIR /app

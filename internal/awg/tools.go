@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,6 +24,14 @@ type Tools struct {
 
 	// BinDir is where awg and awg-quick are installed.
 	BinDir string
+
+	// ifaceLocks serializes the lifecycle operations - up, down, and
+	// syncconf's apply-and-restart - per interface name, so two operations
+	// on one interface never interleave while different interfaces stay
+	// independent. The registry mutex guards only the map and is released
+	// before any interface lock is awaited, so nothing nests.
+	ifaceLocksMu sync.Mutex
+	ifaceLocks   map[string]*sync.Mutex
 }
 
 // New returns Tools issuing commands through run, with the container's
@@ -38,17 +47,64 @@ func (t *Tools) Available() bool {
 	return awgErr == nil && quickErr == nil
 }
 
-// QuickUp brings an interface up from its .conf.
-func (t *Tools) QuickUp(iface string) error {
-	if _, err := t.run.Run(fmt.Sprintf("%s up %s", filepath.Join(t.BinDir, "awg-quick"), iface)); err != nil {
-		return fmt.Errorf("awg-quick up %s: %w", iface, quickFailure(err))
+// lockInterface takes the interface's operation lock and returns its
+// unlock, so a whole up/down/sync sequence runs without another operation
+// on the same interface between its commands.
+func (t *Tools) lockInterface(iface string) func() {
+	t.ifaceLocksMu.Lock()
+	if t.ifaceLocks == nil {
+		t.ifaceLocks = map[string]*sync.Mutex{}
 	}
-	return nil
+	mu := t.ifaceLocks[iface]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		t.ifaceLocks[iface] = mu
+	}
+	t.ifaceLocksMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
+}
+
+// QuickUp brings an interface up from its .conf. A failed start is retried
+// with WG_QUICK_FORCE_USERSPACE=1, which the image's awg-quick - patched by
+// scripts/patch-awg-quick.sh, which holds the why - answers by starting the
+// interface on the userspace engine. An unpatched script ignores the
+// variable and runs the attempt twice. If both attempts fail, the first
+// failure is reported: the reason the deployment would have seen without
+// the retry, and the retry cannot add a better one.
+func (t *Tools) QuickUp(iface string) error {
+	unlock := t.lockInterface(iface)
+	defer unlock()
+	return t.quickUp(iface)
+}
+
+func (t *Tools) quickUp(iface string) error {
+	quick := t.quickCmd("up", iface)
+	_, err := t.run.Run(quick)
+	if err == nil {
+		return nil
+	}
+	first := err
+	if _, retryErr := t.run.Run("WG_QUICK_FORCE_USERSPACE=1 " + quick); retryErr == nil {
+		return nil
+	}
+	return fmt.Errorf("awg-quick up %s: %w", iface, quickFailure(first))
+}
+
+// quickCmd is one awg-quick verb invocation on iface.
+func (t *Tools) quickCmd(verb, iface string) string {
+	return fmt.Sprintf("%s %s %s", filepath.Join(t.BinDir, "awg-quick"), verb, iface)
 }
 
 // QuickDown tears an interface down.
 func (t *Tools) QuickDown(iface string) error {
-	if _, err := t.run.Run(fmt.Sprintf("%s down %s", filepath.Join(t.BinDir, "awg-quick"), iface)); err != nil {
+	unlock := t.lockInterface(iface)
+	defer unlock()
+	return t.quickDown(iface)
+}
+
+func (t *Tools) quickDown(iface string) error {
+	if _, err := t.run.Run(t.quickCmd("down", iface)); err != nil {
 		return fmt.Errorf("awg-quick down %s: %w", iface, quickFailure(err))
 	}
 	return nil
@@ -88,12 +144,28 @@ func quickFailure(err error) error {
 	return &ExitError{Err: exitErr.Err, Stderr: strings.Join(last, "\n")}
 }
 
-// SyncConf pushes the interface's .conf onto the running interface without
-// taking it down, so existing peers keep their sessions.
+// SyncConf pushes the interface's .conf onto the running interface, so
+// existing peers keep their sessions. When the interface rejects the
+// settings, that promise has an exception: the interface is brought down
+// and back up with the current .conf - on the kernel where it takes the
+// config, on the userspace engine where it refuses - so the edit lands;
+// peers reconnect, and a genuinely broken config leaves the server down
+// instead of running with the stale settings.
 func (t *Tools) SyncConf(iface string) error {
+	unlock := t.lockInterface(iface)
+	defer unlock()
 	cmd := fmt.Sprintf("bash -c 'awg syncconf %s <(awg-quick strip %s)'", iface, iface)
-	_, err := t.run.Run(cmd)
-	return err
+	_, syncErr := t.run.Run(cmd)
+	if syncErr == nil {
+		return nil
+	}
+	if err := t.quickDown(iface); err != nil {
+		return fmt.Errorf("awg syncconf %s: %w; restart failed bringing the interface down: %w", iface, syncErr, err)
+	}
+	if err := t.quickUp(iface); err != nil {
+		return fmt.Errorf("awg syncconf %s: %w; restart failed: %w", iface, syncErr, err)
+	}
+	return nil
 }
 
 // InterfaceUp reports whether the kernel has the interface. It shells out,
@@ -110,13 +182,20 @@ func (t *Tools) InterfaceUp(iface string) bool {
 }
 
 // SetupIPTables adds the forwarding and NAT rules for an interface, if the
-// script for it is deployed.
+// script for it is deployed. It takes the interface lock, so the rules can
+// never be added inside - or stripped from under - a concurrent
+// up/down/syncconf sequence on the same interface.
 func (t *Tools) SetupIPTables(iface, subnet string) {
+	unlock := t.lockInterface(iface)
+	defer unlock()
 	t.runScript("setup_iptables.sh", iface, subnet)
 }
 
-// CleanupIPTables removes what SetupIPTables added.
+// CleanupIPTables removes what SetupIPTables added, under the same
+// interface lock as every other operation.
 func (t *Tools) CleanupIPTables(iface, subnet string) {
+	unlock := t.lockInterface(iface)
+	defer unlock()
 	t.runScript("cleanup_iptables.sh", iface, subnet)
 }
 
