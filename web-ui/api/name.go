@@ -26,9 +26,9 @@ const (
 	// NameProblemForbidden is what a name carrying one of the forbidden
 	// characters is told.
 	NameProblemForbidden = "Name must not contain any of these characters: " + NameForbiddenList
-	// NameProblemTrailing is what a name ending in a dot or a space is
-	// told: Windows drops both, so the file would not carry the name.
-	NameProblemTrailing = "Name must not end with a dot or a space"
+	// NameProblemTrailing is what a name ending in a dot is told: Windows
+	// drops the dot, so the file would not carry the name it was given.
+	NameProblemTrailing = "Name must not end with a dot"
 )
 
 // ValidateName reports what is wrong with a client or a server name, or ""
@@ -39,13 +39,19 @@ const (
 // of being reshaped on the way out: the file the user gets is called what
 // they asked for, on every desktop.
 //
+// The rule is about the name as it is stored: the spaces around it are
+// dropped on the way in, so a name typed with a stray trailing space is
+// stored without it and is as usable as the name it spells. A dot is not
+// dropped - the stored name would end in one and the file would not.
+//
 // An empty name is not a problem here: the caller has a fallback of its own
 // for it.
 func ValidateName(name string) string {
+	name = strings.TrimSpace(name)
 	if strings.ContainsAny(name, NameForbiddenChars) {
 		return NameProblemForbidden
 	}
-	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
+	if strings.HasSuffix(name, ".") {
 		return NameProblemTrailing
 	}
 	return ""

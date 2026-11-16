@@ -98,7 +98,7 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 		// rather than only once it is broken. An existing client keeps the
 		// name it was given: the field is closed, and the name is not part
 		// of what an edit saves.
-		nameItem.HintText = lang.L("The characters {{.Chars}} are not accepted, and a name must not end with a dot or a space",
+		nameItem.HintText = lang.L("The characters {{.Chars}} are not accepted, and a name must not end with a dot",
 			map[string]any{"Chars": api.NameForbiddenList})
 	}
 

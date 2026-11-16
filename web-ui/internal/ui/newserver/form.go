@@ -148,7 +148,7 @@ func New(e *env.Env, state State, reflow func()) *Form {
 	// rather than only once the name is refused.
 	nameField := container.NewVBox(
 		widgets.Labeled(lang.L("Server name"), f.name),
-		widgets.MutedNote(lang.L("The characters {{.Chars}} are not accepted, and a name must not end with a dot or a space",
+		widgets.MutedNote(lang.L("The characters {{.Chars}} are not accepted, and a name must not end with a dot",
 			map[string]any{"Chars": api.NameForbiddenList})),
 	)
 	basics := container.NewGridWithColumns(2,
