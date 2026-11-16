@@ -80,7 +80,7 @@ func (m *Manager) ServerInfo(id string) (api.ServerInfo, error) {
 		CreatedAt:          srv.CreatedAt,
 		PublicKey:          srv.ServerPublicKey,
 		DNS:                srv.DNS,
-		DefaultISettings:   wgconf.DefaultISettings(),
+		DefaultISettings:   m.DefaultISettings(),
 	}, nil
 }
 

@@ -218,7 +218,11 @@ func (m *Manager) addClientLocked(serverID, name string, req api.AddClientReques
 
 	iSettings := map[string]string{}
 	if req.ApplyISettings {
-		iSettings = wgconf.MergeISettings(req.ISettings)
+		// The base is the one definition of the standard set - the
+		// shipped defaults under the operator's saved values - and the
+		// client's own non-empty values win over both. Caller holds mu,
+		// so the saved set is read straight from the config.
+		iSettings = wgconf.MergeISettings(m.cfg.DefaultISettings, req.ISettings)
 	}
 
 	newClient := api.Client{

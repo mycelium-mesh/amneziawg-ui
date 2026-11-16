@@ -86,6 +86,7 @@ func (h *Handlers) RegisterRoutes(app *fiber.App) {
 	// Misc
 	r.Get("/clients", h.getAllClients)
 	r.Get("/default-i-settings", h.getDefaultISettings)
+	r.Put("/default-i-settings", h.putDefaultISettings)
 	r.Get("/system/status", h.systemStatus)
 	r.Get("/system/refresh-ip", h.refreshIP)
 	r.Get("/system/iptables-test", h.iptablesTest)

@@ -28,13 +28,15 @@ import (
 //	    repairClientServerIDs.
 //	5 - an Endpoint holding an IP literal is the auto-detected address old
 //	    releases copied in at creation; see clearAutoEndpoints.
+//	6 - the operator's own standard I1-I5 set lives in DefaultISettings;
+//	    see initDefaultISettings.
 //
 // It starts at 3 rather than 1 because pre-release builds already stamped 1
 // and 2 into deployed configs. Numbering the first release below what is
 // already on disk would make those files look newer than the code, and the
 // next migration - guarded by "the config is older than this revision" -
 // would never run on them.
-const SchemaVersion = 5
+const SchemaVersion = 6
 
 // Migrate applies every migration cfg still needs and stamps the result, so
 // none of them run twice. It reports whether cfg changed and therefore needs
@@ -47,6 +49,7 @@ func Migrate(cfg *AppConfig) (changed bool) {
 	// Migrations go here, oldest first.
 	repairClientServerIDs(cfg)
 	clearAutoEndpoints(cfg)
+	initDefaultISettings(cfg)
 
 	cfg.SchemaVersion = SchemaVersion
 	return true
@@ -141,6 +144,21 @@ func clearAutoEndpoints(cfg *AppConfig) {
 			}
 			srv.PublicIP = ""
 		}
+	}
+}
+
+const schemaDefaultISettings = 6
+
+// initDefaultISettings gives a config written before the operator could save
+// their own standard I1-I5 set an empty one, so it serialises as {} rather
+// than null - the same fill-in the missing slices get in Load, and the same
+// meaning: no override, the shipped defaults stand.
+func initDefaultISettings(cfg *AppConfig) {
+	if cfg.SchemaVersion >= schemaDefaultISettings {
+		return
+	}
+	if cfg.DefaultISettings == nil {
+		cfg.DefaultISettings = api.ISettings{}
 	}
 }
 

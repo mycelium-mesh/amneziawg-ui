@@ -7,7 +7,6 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 
-	"amneziawg-web-ui/internal/wgconf"
 	"amneziawg-web-ui/web-ui/api"
 )
 
@@ -26,8 +25,28 @@ func (h *Handlers) containerUptime(c fiber.Ctx) error {
 	return c.SendString(fmt.Sprintf("Container Uptime: %dd %dh %dm %ds", d, h2, m2, s2))
 }
 
+// getDefaultISettings answers with the effective standard set: the shipped
+// defaults under the operator's saved values, from the manager's one
+// definition of it.
 func (h *Handlers) getDefaultISettings(c fiber.Ctx) error {
-	return c.JSON(wgconf.DefaultISettings())
+	return c.JSON(h.mgr.DefaultISettings())
+}
+
+// putDefaultISettings replaces the operator's saved standard I1-I5 set.
+// The body is the set itself; an empty or absent one clears the override,
+// and a value the shared rules reject comes back as 400 through fail, like
+// every other manager validation error. The answer is the effective set as
+// it now stands - the same shape GET hands out.
+func (h *Handlers) putDefaultISettings(c fiber.Ctx) error {
+	var settings api.ISettings
+	if err := decode(c, &settings); err != nil {
+		return fail(c, err)
+	}
+	effective, err := h.mgr.UpdateDefaultISettings(settings)
+	if err != nil {
+		return fail(c, err)
+	}
+	return c.JSON(effective)
 }
 
 func (h *Handlers) systemStatus(c fiber.Ctx) error {

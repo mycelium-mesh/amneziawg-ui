@@ -25,6 +25,14 @@ type AppConfig struct {
 	// Clients slice of the server it belongs to. There is no second copy to
 	// keep in sync.
 	Servers []api.Server `json:"servers"`
+
+	// DefaultISettings is the operator's own standard I1-I5 set: the values
+	// layered over the shipped wgconf defaults wherever the standard set is
+	// used. Empty - or absent in a file written before this field existed -
+	// means no override, and the shipped defaults stand. It is replaced
+	// wholesale rather than merged key by key, so there is no per-key
+	// history to keep here.
+	DefaultISettings api.ISettings `json:"default_i_settings"`
 }
 
 // Store reads and writes the config file at one path.
