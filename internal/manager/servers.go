@@ -405,12 +405,17 @@ func (m *Manager) removeServerLocked(serverID string) bool {
 	return true
 }
 
-// StartServer brings up a WireGuard interface.
+// StartServer brings up a WireGuard interface. The whole flow - up and
+// firewall setup - runs under the interface's flow lock (lockFlow), so a
+// stop or an apply on this server cannot interleave with it.
 func (m *Manager) StartServer(serverID string) error {
 	srv, ok := m.Server(serverID)
 	if !ok {
 		return serverNotFound(serverID)
 	}
+
+	unlock := m.lockFlow(srv.Interface)
+	defer unlock()
 
 	// awg-quick has nothing to do on an interface that is already up: it
 	// fails with "File exists", which is a conflict, not a broken server.
@@ -432,12 +437,17 @@ func (m *Manager) StartServer(serverID string) error {
 	return nil
 }
 
-// StopServer tears down a WireGuard interface.
+// StopServer tears down a WireGuard interface. The whole flow - firewall
+// cleanup and down - runs under the interface's flow lock (lockFlow), so a
+// start or an apply on this server cannot interleave with it.
 func (m *Manager) StopServer(serverID string) error {
 	srv, ok := m.Server(serverID)
 	if !ok {
 		return serverNotFound(serverID)
 	}
+
+	unlock := m.lockFlow(srv.Interface)
+	defer unlock()
 
 	if m.serverStatus(srv.Interface) != "running" {
 		return fmt.Errorf("server %s is not running: %w", serverID, ErrConflict)

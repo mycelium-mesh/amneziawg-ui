@@ -103,10 +103,15 @@ func (m *Manager) forgetServerStatus(iface string) {
 
 // syncLiveConfig pushes the .conf onto the interface when it is actually up.
 // The check is deliberately made here, after the config change and outside
-// the lock, rather than from the stored Status: a peer added while the stored
+// mu, rather than from the stored Status: a peer added while the stored
 // value says "stopped" but the interface is up would silently not take effect
-// until the next restart.
+// until the next restart. The whole apply - the check and the sync - runs
+// under the interface's flow lock (lockFlow), so a start or a stop on this
+// server cannot interleave with it.
 func (m *Manager) syncLiveConfig(iface string) {
+	unlock := m.lockFlow(iface)
+	defer unlock()
+
 	if m.serverStatus(iface) != "running" {
 		return
 	}

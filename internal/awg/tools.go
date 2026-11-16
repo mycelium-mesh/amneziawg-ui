@@ -71,7 +71,8 @@ func (t *Tools) lockInterface(iface string) func() {
 // interface on the userspace engine. An unpatched script ignores the
 // variable and runs the attempt twice. If both attempts fail, the first
 // failure is reported: the reason the deployment would have seen without
-// the retry, and the retry cannot add a better one.
+// the retry, and the retry cannot add a better one. Neither attempt's exit
+// status is taken alone - see upAttempt.
 func (t *Tools) QuickUp(iface string) error {
 	unlock := t.lockInterface(iface)
 	defer unlock()
@@ -80,15 +81,35 @@ func (t *Tools) QuickUp(iface string) error {
 
 func (t *Tools) quickUp(iface string) error {
 	quick := t.quickCmd("up", iface)
-	_, err := t.run.Run(quick)
-	if err == nil {
+	first := t.upAttempt(iface, quick)
+	if first == nil {
 		return nil
 	}
-	first := err
-	if _, retryErr := t.run.Run("WG_QUICK_FORCE_USERSPACE=1 " + quick); retryErr == nil {
+	if retry := t.upAttempt(iface, "WG_QUICK_FORCE_USERSPACE=1 "+quick); retry == nil {
 		return nil
 	}
 	return fmt.Errorf("awg-quick up %s: %w", iface, quickFailure(first))
+}
+
+// upAttempt is one awg-quick up attempt, and the proof that it did what its
+// exit status claims. Upstream's add_if quirk (pinned linux.bash) takes ret
+// from an `if !` condition, where it is always 0, so when
+// /sys/module/amneziawg exists but `ip link add` fails, awg-quick exits 0
+// having created nothing - and a caller trusting that status would mark the
+// server running and install firewall rules for an interface that is not
+// there. So a zero exit alone is not a start: the kernel is asked whether
+// the interface exists, and a success with no interface behind it is
+// reported as the failure it is. The ask is one Runner command like every
+// other here - it takes no lock of its own, so running it under the
+// interface lock costs only the serialization the flow already has.
+func (t *Tools) upAttempt(iface, cmd string) error {
+	if _, err := t.run.Run(cmd); err != nil {
+		return err
+	}
+	if _, err := t.run.Run("ip link show " + iface); err != nil {
+		return errors.New("reported success but the interface does not exist")
+	}
+	return nil
 }
 
 // quickCmd is one awg-quick verb invocation on iface.
@@ -145,17 +166,27 @@ func quickFailure(err error) error {
 }
 
 // SyncConf pushes the interface's .conf onto the running interface, so
-// existing peers keep their sessions. Only a failure configRefusal
-// positively identifies as a configuration being refused restarts the
-// interface: down and back up with the current .conf, on the kernel where
-// it takes the config, on the userspace engine where it refuses - a
-// genuinely broken config leaves the server down rather than on the stale
-// settings. Any other failure returns as the sync error with the
-// interface left running.
+// existing peers keep their sessions. awg-quick strip's output is written to
+// a temp file and its exit status checked before awg syncconf reads anything:
+// the old process substitution hid a strip that died parsing the .conf, and
+// syncconf then applied an empty config - which, with WGDEVICE_REPLACE_PEERS,
+// silently removed every peer while reporting success. A strip failure is
+// returned with strip's own stderr and the interface is not touched; that
+// stderr then goes through configRefusal unchanged: only a failure positively
+// identified as a configuration being refused restarts the interface - down
+// and back up with the current .conf, on the kernel where it takes the
+// config, on the userspace engine where it refuses - a genuinely broken
+// config leaves the server down rather than on the stale settings. Any other
+// failure returns as the sync error with the interface left running.
 func (t *Tools) SyncConf(iface string) error {
 	unlock := t.lockInterface(iface)
 	defer unlock()
-	cmd := fmt.Sprintf("bash -c 'awg syncconf %s <(awg-quick strip %s)'", iface, iface)
+	cmd := fmt.Sprintf(`bash -c 'strip=$(mktemp) || exit 1
+awg-quick strip %[1]s > "$strip" || { s=$?; rm -f "$strip"; exit $s; }
+awg syncconf %[1]s "$strip"
+s=$?
+rm -f "$strip"
+exit $s'`, iface)
 	_, syncErr := t.run.Run(cmd)
 	if syncErr == nil {
 		return nil

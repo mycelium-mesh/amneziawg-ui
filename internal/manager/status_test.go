@@ -73,7 +73,7 @@ func TestLiveSyncFollowsTheInterfaceNotTheStoredStatus(t *testing.T) {
 	if !strings.Contains(string(conf), client.ClientPublicKey) {
 		t.Errorf("peer missing from the conf:\n%s", conf)
 	}
-	if run.Ran("bash -c 'awg syncconf") {
+	if run.Ran("bash -c 'strip=$(mktemp)") {
 		t.Errorf("syncconf was attempted on a down interface: %v", run.Commands)
 	}
 
@@ -81,12 +81,18 @@ func TestLiveSyncFollowsTheInterfaceNotTheStoredStatus(t *testing.T) {
 	// next change must reach the interface.
 	m.forgetServerStatus(iface)
 	run.Stub("ip link show "+iface, iface+": state UNKNOWN")
-	run.Stub("bash -c 'awg syncconf", "")
+	run.Stub("bash -c 'strip=$(mktemp)", "")
 	m.cfg.Servers[0].Status = "stopped"
 	if _, _, err := m.AddClient("s1", api.AddClientRequest{Name: "bob"}); err != nil {
 		t.Fatal(err)
 	}
-	if !run.Ran("bash -c 'awg syncconf " + iface) {
+	synced := false
+	for _, c := range run.Commands {
+		if strings.Contains(c, "awg syncconf "+iface) {
+			synced = true
+		}
+	}
+	if !synced {
 		t.Errorf("syncconf was not run on the live interface: %v", run.Commands)
 	}
 }

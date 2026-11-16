@@ -44,6 +44,45 @@ type Manager struct {
 	// never waits on a config write.
 	statuses map[string]statusObservation
 	statusMu sync.Mutex
+
+	// flows serializes each interface's whole host flow - start, stop and
+	// live apply - so no two interleave on one server; see lockFlow.
+	// Guarded by flowsMu, which like statusMu is deliberately not mu: a
+	// flow lock is never taken with the config lock held, and the config
+	// lock is never taken while another flow waits on this one.
+	flowsMu sync.Mutex
+	flows   map[string]*sync.Mutex
+}
+
+// lockFlow takes the interface's whole-flow lock and returns its unlock.
+// The host flows of one server - start (up + firewall setup), stop (firewall
+// cleanup + down) and the live apply - are critical sections per interface:
+// no part of one flow interleaves another on the same server, so a stop
+// cannot land between a start's up and its firewall rules, and an apply
+// cannot push a config against an interface a stop is tearing down.
+// Different interfaces stay independent: the registry mutex guards only the
+// map and is released before any flow lock is awaited, so nothing nests.
+//
+// Lock order is flow lock first, then awg's per-command-group lock inside
+// the tools call the flow makes, then mu/statusMu for the short state
+// touches - never the reverse: nothing takes a flow lock while holding mu,
+// and nothing holding a flow lock waits on a reader. Reads (serverStatus,
+// ShowPeers, CheckIPTables, InterfaceUp) take neither the flow lock nor the
+// group lock, so a dashboard poll never waits behind shell work; only whole
+// flows serialize against each other.
+func (m *Manager) lockFlow(iface string) func() {
+	m.flowsMu.Lock()
+	if m.flows == nil {
+		m.flows = map[string]*sync.Mutex{}
+	}
+	mu := m.flows[iface]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		m.flows[iface] = mu
+	}
+	m.flowsMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
 }
 
 // New loads the config from st and brings it up to the current schema. It

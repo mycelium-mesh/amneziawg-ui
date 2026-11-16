@@ -93,7 +93,7 @@ func TestOperationsOnOneInterfaceDoNotInterleave(t *testing.T) {
 		t.Fatalf("stop = %v, want nil", err)
 	}
 	got := run.recorded()
-	want := []string{"/usr/bin/awg-quick up wg-1", "/usr/bin/awg-quick down wg-1"}
+	want := []string{"/usr/bin/awg-quick up wg-1", "ip link show wg-1", "/usr/bin/awg-quick down wg-1"}
 	if len(got) != len(want) {
 		t.Fatalf("commands = %v, want %v", got, want)
 	}
