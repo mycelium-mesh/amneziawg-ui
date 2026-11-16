@@ -23,10 +23,13 @@ COPY . .
 # emits the loader page, its stylesheets and the bundle straight into
 # web-ui/wasm.
 #
-# The bundle then ships pre-compressed and nothing else: 14 MB of gzip plus
-# about 10 MB of brotli - 24 MB of layer instead of 49 - and the server hands
-# the files over as they are rather than compressing 49 MB again on every
-# cold request (see packedAssets in internal/frontend).
+# The bundle then ships pre-compressed and nothing else: 7 876 732 B of gzip
+# plus 5 507 844 B of brotli - about 13.90 MB of layer (MB = 10^6) instead of
+# the 32 194 058 B raw bundle, which the image does not store at all - and the
+# server hands the files over as they are rather than compressing the bundle
+# again on every cold request; an identity response is unpacked from the .gz
+# with the exact length read from its ISIZE footer (see packedAssets in
+# internal/frontend).
 #
 # The two build tags are the Makefile's WASM_TAGS spelled out inline, so both
 # pipelines ship an identically marked bundle: no_emoji drops the built-in

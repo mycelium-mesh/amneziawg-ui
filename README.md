@@ -15,7 +15,9 @@ AmneziaWG, добавляйте клиентов, выдавайте конфи�
 подключениями в браузере. Amnezia Panel.
 
 Это лёгкая альтернатива `amnezia-wg-easy` и `wg-easy`: один Go-бинарник и
-три бинарника AmneziaWG в Alpine-образе размером всего **~23 МБ** (у
+три бинарника AmneziaWG в Alpine-образе: на диске **71 122 962 B** (71,1 МБ
+= 10^6, 67,8 МиБ = 2^20; было 67 702 481 B, +5,0 %), по сети образ идёт
+сжатым — точный размер показывает бейдж выше (у
 [amnezia-wg-easy](https://github.com/w0rng/amnezia-wg-easy) — ~80 МБ) — без
 Node.js, nginx и supervisor. **AmneziaWG 3.1 (header protection + random
 trailers) — встроенный и всегда включённый режим обфускации**, ничего
@@ -29,8 +31,9 @@ trailers) — встроенный и всегда включённый режи
 </p>
 
 > **AmneziaWG Web UI** is a self-hosted admin panel (web UI) for AmneziaWG —
-> the DPI-resistant, obfuscated WireGuard fork. A single ~23 MB Docker image
-> (Go + Alpine) to create VPN servers, manage clients, export `.conf`, QR
+> the DPI-resistant, obfuscated WireGuard fork. A single Docker image (Go + Alpine): 71 122 962 B on disk
+> (71.1 MB = 10^6, 67.8 MiB = 2^20), compressed on the wire —
+> to create VPN servers, manage clients, export `.conf`, QR
 > codes and AmneziaVPN `vpn://` links, and watch traffic — with AmneziaWG 3.1
 > obfuscation (header protection, random trailers) always on. The UI is in
 > English and Russian; the documentation is in Russian.
@@ -65,7 +68,8 @@ trailers) — встроенный и всегда включённый режи
 - **Автозапуск серверов** после перезапуска контейнера, **автоматическая
   настройка iptables**, поддержка IPv4 и IPv6
 - **Интерфейс на русском и английском** — язык берётся из настроек браузера
-- **Минимальный образ**: Go + Alpine, ~23 МБ, без интерпретаторов и лишних
+- **Минимальный образ**: Go + Alpine — 71 122 962 B на диске (71,1 МБ =
+  10^6 / 67,8 МиБ = 2^20), по сети сжатый, без интерпретаторов и лишних
   сервисов
 
 ## Быстрый старт: AmneziaWG в Docker за одну минуту
@@ -206,6 +210,10 @@ QR-код. Для более старых клиентов снимите в ф�
 Панель отдаёт HTTP с basic auth. Для доступа из интернета поставьте перед
 ней reverse proxy с TLS (Caddy, nginx, Traefik) или ограничьте порт
 `54845` файрволом.
+
+Позади TLS-прокси браузер получает бандл в brotli — 5 507 844 B; по чистому
+http бандл идёт в gzip — 7 876 732 B, потому что браузеры запрашивают `br`
+только по https и `localhost`.
 
 ## Документация
 
