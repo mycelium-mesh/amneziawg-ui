@@ -392,6 +392,31 @@ func TestSyncConfDoesNotRestartOnAnEchoedSignature(t *testing.T) {
 	}
 }
 
+// The classifier's named carve-out: "Unable to parse
+// WG_ENDPOINT_RESOLUTION_RETRIES: `<v>'" (pinned config.c:197) shares the
+// config-value family's exact message shape but parses an environment
+// variable, not the .conf - outside the class, and a restart cannot fix an
+// environment. The message comes back as the sync error, naming it, with
+// not one command beyond the apply: no disruptive restart of a live server
+// over an env-var parse failure.
+func TestSyncConfDoesNotRestartOnAnEnvironmentVariableParseFailure(t *testing.T) {
+	envBroken := &awg.ExitError{
+		Err:    errors.New("exit status 1"),
+		Stderr: "Unable to parse WG_ENDPOINT_RESOLUTION_RETRIES: `infinity-ish'",
+	}
+	run := awgtest.New().Fail(applyPrefix, envBroken)
+
+	err := awg.New(run).SyncConf("wg-1")
+	want := "awg syncconf wg-1: exit status 1:" +
+		" Unable to parse WG_ENDPOINT_RESOLUTION_RETRIES: `infinity-ish'"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %q, want %q", err, want)
+	}
+	if len(run.Commands) != 1 {
+		t.Errorf("commands = %v, want the apply alone, interface untouched", run.Commands)
+	}
+}
+
 // An infrastructural failure - a busy device, not a refusal of the
 // settings - leaves the interface exactly as it was: the sync error comes
 // back naming the failure, and not one restart command runs.
