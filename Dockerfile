@@ -33,8 +33,9 @@ COPY . .
 # EmojiOneColor font (about 4 MB raw - the trade-off is that emoji in user
 # names stop rendering; the UI itself has no emoji literals) and
 # nethttpomithttp2 drops the HTTP/2 code, which the bundle never uses since
-# the browser's fetch owns the transport. The grep after packaging fails the
-# build if the font ever comes back.
+# the browser's fetch owns the transport. The checks after packaging fail
+# the build if the font or the HTTP/2 connection preface ever comes back
+# and hold the gzip copy to the same 8 MiB ceiling make web-ui-check enforces.
 #
 # GOOS=js output is identical for every target platform, so this stage names no
 # TARGETARCH and BuildKit builds it once for the whole multi-platform image.
@@ -60,8 +61,14 @@ RUN --mount=type=cache,id=awg_mod,target=/go/pkg/mod \
     fi \
     && cd web-ui && go tool fyne package -os wasm --name bundle --release --tags no_emoji,nethttpomithttp2 \
     && ! grep -Fq 'EmojiOneColor' wasm/bundle.wasm \
+    && ! grep -Fq 'PRI * HTTP/2.0' wasm/bundle.wasm \
     && brotli -q 11 -w 24 wasm/bundle.wasm \
-    && gzip -9 wasm/bundle.wasm
+    && gzip -9 wasm/bundle.wasm \
+    && gz=$(wc -c < wasm/bundle.wasm.gz) \
+    && if [ "$gz" -gt 8388608 ]; then \
+        echo "web stage: bundle is $gz B gzipped, over the 8388608 B ceiling" >&2; \
+        exit 1; \
+    fi
 
 # ── Backend ───────────────────────────────────────────────────────
 FROM base AS builder
