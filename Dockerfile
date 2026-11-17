@@ -23,9 +23,10 @@ COPY . .
 # emits the loader page, its stylesheets and the bundle straight into
 # web-ui/wasm.
 #
-# The bundle then ships gzipped and nothing else: 14 MB of layer instead of 49,
-# and the server hands the file over as it is rather than compressing 49 MB
-# again on every cold request (see packedAssets in main.go).
+# The bundle then ships gzipped and nothing else: the layer holds the
+# compressed bundle rather than the raw one, and the server hands the file
+# over as it is rather than compressing it again on every cold request (see
+# packedAssets in main.go).
 #
 # The two build tags are the Makefile's WASM_TAGS spelled out inline, so both
 # pipelines ship an identically marked bundle: no_emoji drops the built-in

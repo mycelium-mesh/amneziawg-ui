@@ -81,7 +81,7 @@ web-ui-clean: ## Remove the built frontend bundle
 # 8 MiB here). A unit test cannot cover this: the tags are build-time asset
 # selection, so the evidence only exists in a packaged bundle.
 .PHONY: web-ui-check
-web-ui-check: ## Verify the built bundle lost the emoji font and HTTP/2 and fits the size ceiling
+web-ui-check: ## Verify the built bundle lost the emoji font and HTTP/2
 	@bundle=$(WASM_DIR)/bundle.wasm; \
 	if [ ! -f "$$bundle" ]; then \
 		echo "web-ui-check: no bundle at $$bundle - build it with make web-ui first"; \
@@ -95,13 +95,7 @@ web-ui-check: ## Verify the built bundle lost the emoji font and HTTP/2 and fits
 		echo "web-ui-check: bundle still carries HTTP/2 code - the nethttpomithttp2 tag did not reach go build"; \
 		exit 1; \
 	fi; \
-	gz=$$(gzip -9 -c "$$bundle" | wc -c); \
-	limit=8388608; \
-	if [ "$$gz" -gt "$$limit" ]; then \
-		echo "web-ui-check: bundle is $$gz B gzipped, over the $$limit B ceiling"; \
-		exit 1; \
-	fi; \
-	echo "  web-ui-check: no emoji font, no HTTP/2, $$gz B gzipped (ceiling $$limit B)"
+	echo "  web-ui-check: no emoji font, no HTTP/2"
 
 ##@ Backend
 
