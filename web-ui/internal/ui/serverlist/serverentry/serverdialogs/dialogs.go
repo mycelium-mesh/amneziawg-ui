@@ -147,9 +147,6 @@ func ShowEndpointEditor(e *env.Env, srv api.Server) {
 	dialogs.ShowForm(e.Win, lang.L("Edit endpoint of {{.Name}}", map[string]any{"Name": srv.Name}),
 		lang.L("Save"), lang.L("Cancel"), content, dialogs.Size(e.Win, 560, 200), func() bool {
 			value := strings.TrimSpace(endpoint.Text)
-			if value == srv.Endpoint {
-				return true // nothing changed, nothing to send
-			}
 			// The endpoint lands in a generated client .conf, so the
 			// shared rule checks it before the request, like the create
 			// form and the server-side create do.
@@ -158,6 +155,21 @@ func ShowEndpointEditor(e *env.Env, srv api.Server) {
 				return false
 			}
 			go func() {
+				// "Nothing changed" is decided against the endpoint the
+				// server holds now, not the snapshot this dialog was opened
+				// with: the card hands that snapshot to its buttons when it
+				// renders, and the render runs on the UI goroutine, which a
+				// slow frame can hold up past the next click. Against a stale
+				// "" a confirmed clear reads as "nothing changed" and the
+				// dialog closes without sending anything - the save is
+				// dropped in silence.
+				if current, err := e.Backend.Servers(); err == nil {
+					for _, other := range current {
+						if other.ID == srv.ID && other.Endpoint == value {
+							return // nothing changed, nothing to send
+						}
+					}
+				}
 				if err := e.Backend.UpdateServerEndpoint(srv.ID, value); err != nil {
 					e.Notify.Fail(err)
 					return
