@@ -357,19 +357,28 @@ func (m *Manager) subnetInUse(subnet string) (string, bool) {
 	return "", false
 }
 
-// DeleteServer stops and removes a server and its clients.
+// DeleteServer stops and removes a server and its clients. The whole
+// decision - the running check, the stop it may need, the removal - runs
+// under the interface's flow lock (lockFlow): a start racing a delete runs
+// entirely before or after it, and one that runs after re-checks the store
+// under the same lock and finds the server gone - so a deleted server's
+// interface cannot come back up, even though removing its .conf is
+// best-effort.
 func (m *Manager) DeleteServer(serverID string) error {
 	srv, ok := m.Server(serverID)
 	if !ok {
 		return serverNotFound(serverID)
 	}
 
+	unlock := m.lockFlow(srv.Interface)
+	defer unlock()
+
 	// The stored Status is only the last observation; the interface may have
 	// been brought up or down since - including by a restart of this process
 	// - and deleting a server whose interface is still up would leave it and
 	// its iptables rules behind.
 	if m.serverStatus(srv.Interface) == "running" {
-		if err := m.StopServer(serverID); err != nil {
+		if err := m.stopServer(&srv); err != nil {
 			return fmt.Errorf("stopping the server first: %w", err)
 		}
 	}
@@ -405,10 +414,26 @@ func (m *Manager) removeServerLocked(serverID string) bool {
 	return true
 }
 
-// StartServer brings up a WireGuard interface.
+// StartServer brings up a WireGuard interface. The whole flow - the store
+// re-check, up and firewall setup - runs under the interface's flow lock
+// (lockFlow), so a stop, a delete or an apply on this server cannot
+// interleave with it.
 func (m *Manager) StartServer(serverID string) error {
 	srv, ok := m.Server(serverID)
 	if !ok {
+		return serverNotFound(serverID)
+	}
+
+	unlock := m.lockFlow(srv.Interface)
+	defer unlock()
+
+	// The store decides, under the lock: a delete racing this start
+	// serializes on the same flow lock, and whichever runs second takes the
+	// store as the first left it. The delete's file removal is best-effort
+	// - removeServerLocked ignores os.Remove's error - so without this
+	// re-check a leftover .conf would let awg-quick resurrect the interface
+	// of a server that is gone.
+	if _, ok := m.Server(serverID); !ok {
 		return serverNotFound(serverID)
 	}
 
@@ -432,15 +457,28 @@ func (m *Manager) StartServer(serverID string) error {
 	return nil
 }
 
-// StopServer tears down a WireGuard interface.
+// StopServer tears down a WireGuard interface. The whole flow - firewall
+// cleanup and down - runs under the interface's flow lock (lockFlow), so a
+// start or an apply on this server cannot interleave with it.
 func (m *Manager) StopServer(serverID string) error {
 	srv, ok := m.Server(serverID)
 	if !ok {
 		return serverNotFound(serverID)
 	}
 
+	unlock := m.lockFlow(srv.Interface)
+	defer unlock()
+
+	return m.stopServer(&srv)
+}
+
+// stopServer is StopServer's teardown with the interface's flow lock already
+// held by the caller. The lock is not reentrant, so only entry points take
+// it; DeleteServer reuses this inner form to keep its decision, the stop it
+// may need, and the removal one critical section.
+func (m *Manager) stopServer(srv *api.Server) error {
 	if m.serverStatus(srv.Interface) != "running" {
-		return fmt.Errorf("server %s is not running: %w", serverID, ErrConflict)
+		return fmt.Errorf("server %s is not running: %w", srv.ID, ErrConflict)
 	}
 
 	m.tools.CleanupIPTables(srv.Interface, srv.Subnet)
@@ -450,7 +488,7 @@ func (m *Manager) StopServer(serverID string) error {
 		return err
 	}
 
-	m.setServerStatus(serverID, "stopped")
+	m.setServerStatus(srv.ID, "stopped")
 	m.noteServerStatus(srv.Interface, "stopped")
 	m.saveOrLog("server stop")
 

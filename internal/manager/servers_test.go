@@ -313,6 +313,7 @@ func TestCreateServerWritesTheConfAndAutoStarts(t *testing.T) {
 	m, run := newTestManager(t)
 	run.Stub("awg genkey", "SPRIV").Stub("echo 'SPRIV' | awg pubkey", "SPUB")
 	run.Stub("/usr/bin/awg-quick up wg-", "")
+	run.Stub("ip link show ", "") // QuickUp's check: the interface exists after the start
 	yes := true
 
 	srv, err := m.CreateServer(api.CreateServerRequest{Name: "second", Port: 54846, Subnet: "10.0.2.0/24", AutoStart: &yes})

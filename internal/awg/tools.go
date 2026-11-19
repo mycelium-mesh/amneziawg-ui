@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,6 +24,14 @@ type Tools struct {
 
 	// BinDir is where awg and awg-quick are installed.
 	BinDir string
+
+	// ifaceLocks serializes the lifecycle operations - up, down, and
+	// syncconf's apply-and-restart - per interface name, so two operations
+	// on one interface never interleave while different interfaces stay
+	// independent. The registry mutex guards only the map and is released
+	// before any interface lock is awaited, so nothing nests.
+	ifaceLocksMu sync.Mutex
+	ifaceLocks   map[string]*sync.Mutex
 }
 
 // New returns Tools issuing commands through run, with the container's
@@ -38,17 +47,91 @@ func (t *Tools) Available() bool {
 	return awgErr == nil && quickErr == nil
 }
 
-// QuickUp brings an interface up from its .conf.
+// lockInterface takes the interface's operation lock and returns its
+// unlock, so a whole up/down/sync sequence runs without another operation
+// on the same interface between its commands.
+func (t *Tools) lockInterface(iface string) func() {
+	t.ifaceLocksMu.Lock()
+	if t.ifaceLocks == nil {
+		t.ifaceLocks = map[string]*sync.Mutex{}
+	}
+	mu := t.ifaceLocks[iface]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		t.ifaceLocks[iface] = mu
+	}
+	t.ifaceLocksMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
+}
+
+// QuickUp brings an interface up from its .conf. A failed start is retried
+// with WG_QUICK_FORCE_USERSPACE=1, which the image's awg-quick - patched by
+// scripts/patch-awg-quick.sh, which holds the why - answers by starting the
+// interface on the userspace engine. An unpatched script ignores the
+// variable and runs the attempt twice. If both attempts fail, the first
+// failure is reported: the reason the deployment would have seen without
+// the retry, and the retry cannot add a better one. Neither attempt's exit
+// status is taken alone - see upAttempt.
 func (t *Tools) QuickUp(iface string) error {
-	if _, err := t.run.Run(fmt.Sprintf("%s up %s", filepath.Join(t.BinDir, "awg-quick"), iface)); err != nil {
-		return fmt.Errorf("awg-quick up %s: %w", iface, quickFailure(err))
+	unlock := t.lockInterface(iface)
+	defer unlock()
+	return t.quickUp(iface)
+}
+
+func (t *Tools) quickUp(iface string) error {
+	quick := t.quickCmd("up", iface)
+	first := t.upAttempt(iface, quick)
+	if first == nil {
+		return nil
+	}
+	if retry := t.upAttempt(iface, "WG_QUICK_FORCE_USERSPACE=1 "+quick); retry == nil {
+		return nil
+	}
+	return fmt.Errorf("awg-quick up %s: %w", iface, quickFailure(first))
+}
+
+// upAttempt is one awg-quick up attempt, and the proof that it did what its
+// exit status claims. A zero exit with no interface behind it is genuinely
+// reachable: the userspace engine daemonizes, so the parent can exit 0
+// while the daemon dies again with no interface laid down (the daemon-death
+// race), and the check doubles as defense-in-depth against any other
+// exit-0-with-nothing. So after every attempt that exits 0 the kernel is
+// asked whether the interface exists, and a success with nothing to show
+// for it is reported as the failure it is: no caller marks a server running
+// or lays down firewall rules for an interface that is not there. It is
+// not, though, a guard against upstream add_if's `exit $ret` quirk (pinned
+// linux.bash): that status survives cmd_up's EXIT trap on the image's bash,
+// and the trap's del_if then fails under `set -e` on the never-created
+// device, so the run ends non-zero anyway - that state's real defects are
+// the missing userspace fallback and a cleanup error that hides the cause,
+// not a phantom success. The ask is one Runner command like every other
+// here - it takes no lock of its own, so running it under the interface
+// lock costs only the serialization the flow already has.
+func (t *Tools) upAttempt(iface, cmd string) error {
+	if _, err := t.run.Run(cmd); err != nil {
+		return err
+	}
+	if _, err := t.run.Run("ip link show " + iface); err != nil {
+		return errors.New("reported success but the interface does not exist")
 	}
 	return nil
 }
 
+// quickCmd is one awg-quick verb invocation on iface.
+func (t *Tools) quickCmd(verb, iface string) string {
+	return fmt.Sprintf("%s %s %s", filepath.Join(t.BinDir, "awg-quick"), verb, iface)
+}
+
 // QuickDown tears an interface down.
 func (t *Tools) QuickDown(iface string) error {
-	if _, err := t.run.Run(fmt.Sprintf("%s down %s", filepath.Join(t.BinDir, "awg-quick"), iface)); err != nil {
+	unlock := t.lockInterface(iface)
+	defer unlock()
+	return t.quickDown(iface)
+}
+
+func (t *Tools) quickDown(iface string) error {
+	if _, err := t.run.Run(t.quickCmd("down", iface)); err != nil {
 		return fmt.Errorf("awg-quick down %s: %w", iface, quickFailure(err))
 	}
 	return nil
@@ -88,12 +171,144 @@ func quickFailure(err error) error {
 	return &ExitError{Err: exitErr.Err, Stderr: strings.Join(last, "\n")}
 }
 
-// SyncConf pushes the interface's .conf onto the running interface without
-// taking it down, so existing peers keep their sessions.
+// SyncConf pushes the interface's .conf onto the running interface, so
+// existing peers keep their sessions. awg-quick strip's output is written to
+// a temp file and its exit status checked before awg syncconf reads anything:
+// the old process substitution hid a strip that died parsing the .conf, and
+// syncconf then applied an empty config - which, with WGDEVICE_REPLACE_PEERS,
+// silently removed every peer while reporting success. A strip failure is
+// returned with strip's own stderr and the interface is not touched; that
+// stderr then goes through configRefusal unchanged: only a failure positively
+// identified as a configuration being refused restarts the interface - down
+// and back up with the current .conf, on the kernel where it takes the
+// config, on the userspace engine where it refuses - a genuinely broken
+// config leaves the server down rather than on the stale settings. Any other
+// failure returns as the sync error with the interface left running.
 func (t *Tools) SyncConf(iface string) error {
-	cmd := fmt.Sprintf("bash -c 'awg syncconf %s <(awg-quick strip %s)'", iface, iface)
-	_, err := t.run.Run(cmd)
-	return err
+	unlock := t.lockInterface(iface)
+	defer unlock()
+	cmd := fmt.Sprintf(`bash -c 'strip=$(mktemp) || exit 1
+awg-quick strip %[1]s > "$strip" || { s=$?; rm -f "$strip"; exit $s; }
+awg syncconf %[1]s "$strip"
+s=$?
+rm -f "$strip"
+exit $s'`, iface)
+	_, syncErr := t.run.Run(cmd)
+	if syncErr == nil {
+		return nil
+	}
+	if !configRefusal(syncErr) {
+		return fmt.Errorf("awg syncconf %s: %w", iface, quickFailure(syncErr))
+	}
+	if err := t.quickDown(iface); err != nil {
+		return fmt.Errorf("awg syncconf %s: %w; restart failed bringing the interface down: %w", iface, syncErr, err)
+	}
+	if err := t.quickUp(iface); err != nil {
+		return fmt.Errorf("awg syncconf %s: %w; restart failed: %w", iface, syncErr, err)
+	}
+	return nil
+}
+
+// configRefusal positively identifies an awg syncconf failure as the
+// configuration being refused - the only class that earns the disruptive
+// restart. Every signature is matched at the START of a whole stderr line,
+// in the form the pinned amneziawg-tools (AWG_TOOLS_VERSION) prints it:
+// stderr carries echoed config text as well - a .conf value embedding a
+// signature (SaveConfig = Invalid configuration) comes back inside
+// awg-quick's own die line (pinned linux.bash:80, die() at :35-38 -
+// "$PROGRAM: $*"). The value sits between that line's fixed prefix and its
+// fixed tail: it satisfies the die's own form but can forge no other
+// signature, which each require their own whole line or line prefix.
+//
+// The signatures, all verbatim from the pinned tree:
+//
+//	"Line unrecognized: `<line>'"          config.c:617, line prefix
+//	"Configuration parsing error"          setconf.c:126, the whole line;
+//	                                        prints when config_read_line
+//	                                        returns false
+//	"Invalid configuration"                setconf.c:132, the whole line;
+//	                                        config_read_finish refused the
+//	                                        device
+//	"Unable to parse <key>: `<value>'"     config.c:408 (parse_uint16:
+//	                                        Jc/Jmin/Jmax/S1-S4) and
+//	                                        config.c:440 (parse_bool:
+//	                                        RandomTrailers/DisableCookies),
+//	                                        line prefix - these exit(1)
+//	                                        mid-read, so setconf.c:126's
+//	                                        suffix never follows and nothing
+//	                                        else in stderr marks them; the
+//	                                        return-false members of the same
+//	                                        family (config.c:59, :179, :220,
+//	                                        :398, :417) already reach :126.
+//	                                        One member is excluded by name:
+//	                                        "Unable to parse
+//	                                        WG_ENDPOINT_RESOLUTION_RETRIES:
+//	                                        `<v>'" (config.c:197) has the
+//	                                        same shape but parses an
+//	                                        environment variable - not the
+//	                                        configuration, and no restart can
+//	                                        fix it.
+//	"awg-quick: `<value>' is neither true nor false"
+//	                                    linux.bash:80 (read_bool, called
+//	                                    from parse_options' SaveConfig at
+//	                                    :68; die() :35-38 adds the
+//	                                    "$PROGRAM: " prefix, PROGRAM
+//	                                    :27), line prefix plus fixed tail
+//	                                    - the strip script's own death on
+//	                                    .conf content. The other
+//	                                    linux.bash dies mean environment
+//	                                    or state, not content, and stay
+//	                                    unidentified: file missing (:44),
+//	                                    interface naming (:45), write/move
+//	                                    of the file (:283/:285), interface
+//	                                    state (:328/:346/:356).
+//	"Unable to modify interface: <strerror>" setconf.c:144's perror with
+//	                                        ipc.c:70 turning the device's
+//	                                        errno into that strerror; its
+//	                                        tails are musl's strerror texts
+//	                                        as the pinned image's libc prints
+//	                                        them (English, __strerror.h lines
+//	                                        49/85/83), case-folded, plus
+//	                                        glibc's "Operation not supported"
+//	                                        for EOPNOTSUPP - the line must be
+//	                                        exactly the message plus one of
+//	                                        those tails.
+//
+// A localized or unrecognized strerror, the get failure at setconf.c:44, a
+// non-ExitError, an echoed value outside those fixed forms, or any other
+// stderr shape is not identified: unknown means no restart.
+func configRefusal(err error) bool {
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	for _, raw := range strings.Split(exitErr.Stderr, "\n") {
+		line := strings.TrimSpace(raw)
+
+		switch {
+		case strings.HasPrefix(line, "Line unrecognized: `"),
+			line == "Configuration parsing error",
+			line == "Invalid configuration":
+			return true
+		case strings.HasPrefix(line, "awg-quick: `") && strings.HasSuffix(line, "' is neither true nor false"):
+			return true
+		case strings.HasPrefix(line, "Unable to parse WG_ENDPOINT_RESOLUTION_RETRIES: "):
+			// Same shape as the value-parser family, wrong class: an
+			// environment variable, not the .conf. Not identified.
+		case strings.HasPrefix(line, "Unable to parse "):
+			return true
+		}
+
+		const modify = "Unable to modify interface: "
+		if !strings.HasPrefix(line, modify) {
+			continue
+		}
+		switch strings.ToLower(line[len(modify):]) {
+		case "invalid argument", "operation not supported", "not supported", "protocol not supported":
+			return true
+		}
+	}
+	return false
 }
 
 // InterfaceUp reports whether the kernel has the interface. It shells out,
@@ -110,13 +325,20 @@ func (t *Tools) InterfaceUp(iface string) bool {
 }
 
 // SetupIPTables adds the forwarding and NAT rules for an interface, if the
-// script for it is deployed.
+// script for it is deployed. It takes the interface lock, so the rules can
+// never be added inside - or stripped from under - a concurrent
+// up/down/syncconf sequence on the same interface.
 func (t *Tools) SetupIPTables(iface, subnet string) {
+	unlock := t.lockInterface(iface)
+	defer unlock()
 	t.runScript("setup_iptables.sh", iface, subnet)
 }
 
-// CleanupIPTables removes what SetupIPTables added.
+// CleanupIPTables removes what SetupIPTables added, under the same
+// interface lock as every other operation.
 func (t *Tools) CleanupIPTables(iface, subnet string) {
+	unlock := t.lockInterface(iface)
+	defer unlock()
 	t.runScript("cleanup_iptables.sh", iface, subnet)
 }
 
