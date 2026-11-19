@@ -113,3 +113,9 @@ context in `e2e/main_test.go`.
 # Changelog
 
 `./CHANGELOG.md`
+
+# Commits and pull requests
+
+Do not add a co-author to commits or pull requests: no `Co-Authored-By:`
+trailer in commit messages and no "Generated with ..." attribution line in
+PR descriptions.
