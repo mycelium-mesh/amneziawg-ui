@@ -31,12 +31,19 @@ func TestValidateNameRefusesTheForbiddenCharacters(t *testing.T) {
 	}
 }
 
-// A name ending in a dot or a space is refused: Windows drops both, so the
-// file would not carry the name it was given.
-func TestValidateNameRefusesATrailingDotOrSpace(t *testing.T) {
-	for _, bad := range []string{"name.", "name ", "name. ", "name ."} {
+// A name ending in a dot is refused: Windows drops the dot, so the file
+// would not carry the name it was given. A name ending in a space is not:
+// the spaces around a name are dropped on the way in, and what is stored is
+// the name it spells - so "bob " is as usable as "bob".
+func TestValidateNameRefusesATrailingDot(t *testing.T) {
+	for _, bad := range []string{"name.", "name. ", "name .", "..."} {
 		if problem := ValidateName(bad); problem != NameProblemTrailing {
 			t.Errorf("ValidateName(%q) = %q, want the trailing problem", bad, problem)
+		}
+	}
+	for _, ok := range []string{"name ", " name", " name ", "name"} {
+		if problem := ValidateName(ok); problem != "" {
+			t.Errorf("ValidateName(%q) = %q, want no problem", ok, problem)
 		}
 	}
 }
@@ -51,8 +58,8 @@ func TestTheNameProblemsAreFixedMessages(t *testing.T) {
 	if got := ValidateName("a:b"); got != ValidateName("c/d") {
 		t.Errorf("the same problem got two messages: %q and %q", got, ValidateName("c/d"))
 	}
-	if got := ValidateName("name."); got != ValidateName("other ") {
-		t.Errorf("the same problem got two messages: %q and %q", got, ValidateName("other "))
+	if got := ValidateName("name."); got != ValidateName("other.") {
+		t.Errorf("the same problem got two messages: %q and %q", got, ValidateName("other."))
 	}
 	// A name that breaks both rules is told about the characters first.
 	if got := ValidateName("a:b."); got != NameProblemForbidden {

@@ -354,7 +354,7 @@ func TestAddClientRefusesANameThatCannotBeAFileName(t *testing.T) {
 
 	for _, bad := range []string{
 		"a<b", "a>b", "a:b", `a"b`, "a|b", "a?b", "a*b", "a/b", `a\b`,
-		"name.", "name ",
+		"name.", "name .",
 	} {
 		if _, _, err := m.AddClient("s1", api.AddClientRequest{Name: bad}); !errors.Is(err, ErrInvalid) {
 			t.Errorf("AddClient(%q): error = %v, want ErrInvalid", bad, err)
@@ -364,8 +364,15 @@ func TestAddClientRefusesANameThatCannotBeAFileName(t *testing.T) {
 		t.Errorf("clientCount = %d, want 0: a refused name adds no client", got)
 	}
 
-	if _, _, err := m.AddClient("s1", api.AddClientRequest{Name: "alice"}); err != nil {
+	// The spaces around a name are dropped on the way in, so a name typed
+	// with a stray trailing space is stored without it and is as usable as
+	// the name it spells.
+	client, _, err := m.AddClient("s1", api.AddClientRequest{Name: " alice "})
+	if err != nil {
 		t.Fatalf("a usable name was refused: %v", err)
+	}
+	if client.Name != "alice" {
+		t.Errorf("stored name = %q, want %q", client.Name, "alice")
 	}
 }
 

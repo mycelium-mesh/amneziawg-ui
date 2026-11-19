@@ -100,7 +100,7 @@ func TestCreateServerRefusesANameThatCannotBeAFileName(t *testing.T) {
 
 	for _, bad := range []string{
 		"a<b", "a>b", "a:b", `a"b`, "a|b", "a?b", "a*b", "a/b", `a\b`,
-		"name.", "name ",
+		"name.", "name .",
 	} {
 		_, err := m.CreateServer(api.CreateServerRequest{Name: bad, Port: 54846, Subnet: "10.0.2.0/24"})
 		if !errors.Is(err, ErrInvalid) {
@@ -111,8 +111,15 @@ func TestCreateServerRefusesANameThatCannotBeAFileName(t *testing.T) {
 		t.Fatalf("nothing should have been created, got %d servers", got)
 	}
 
-	if _, err := m.CreateServer(api.CreateServerRequest{Name: "second", Port: 54846, Subnet: "10.0.2.0/24"}); err != nil {
+	// The spaces around a name are dropped on the way in, so a name typed
+	// with a stray trailing space is stored without it and is as usable as
+	// the name it spells.
+	srv, err := m.CreateServer(api.CreateServerRequest{Name: "second ", Port: 54846, Subnet: "10.0.2.0/24"})
+	if err != nil {
 		t.Fatalf("a usable name was refused: %v", err)
+	}
+	if srv.Name != "second" {
+		t.Errorf("stored name = %q, want %q", srv.Name, "second")
 	}
 }
 
