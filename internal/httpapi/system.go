@@ -7,7 +7,6 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 
-	"amneziawg-web-ui/internal/wgconf"
 	"amneziawg-web-ui/web-ui/api"
 )
 
@@ -26,8 +25,43 @@ func (h *Handlers) containerUptime(c fiber.Ctx) error {
 	return c.SendString(fmt.Sprintf("Container Uptime: %dd %dh %dm %ds", d, h2, m2, s2))
 }
 
+// getDefaultISettings answers with the effective standard set: the shipped
+// defaults under the operator's saved values, from the manager's one
+// definition of it.
 func (h *Handlers) getDefaultISettings(c fiber.Ctx) error {
-	return c.JSON(wgconf.DefaultISettings())
+	return c.JSON(h.mgr.DefaultISettings())
+}
+
+// putDefaultISettings merges the operator's update into the saved standard
+// I1-I5 set: only keys sent with a non-empty value change, every other key
+// keeps its saved state - an absent or empty key holds no opinion, exactly
+// what the layering rule means - so a partial save can never drop a value
+// that was already saved. An all-empty body changes nothing. A value the
+// shared rules reject comes back as 400 through fail, like every other
+// manager validation error. The answer is the effective set as it now
+// stands - the same shape GET hands out.
+func (h *Handlers) putDefaultISettings(c fiber.Ctx) error {
+	var settings api.ISettings
+	if err := decode(c, &settings); err != nil {
+		return fail(c, err)
+	}
+	effective, err := h.mgr.UpdateDefaultISettings(settings)
+	if err != nil {
+		return fail(c, err)
+	}
+	return c.JSON(effective)
+}
+
+// deleteDefaultISettings is the one explicit full clear: the saved standard
+// is dropped and the shipped defaults stand again - what the dialog's
+// "Restore shipped defaults" confirms and calls. The answer is the
+// effective set, in the same shape GET hands out.
+func (h *Handlers) deleteDefaultISettings(c fiber.Ctx) error {
+	effective, err := h.mgr.ClearDefaultISettings()
+	if err != nil {
+		return fail(c, err)
+	}
+	return c.JSON(effective)
 }
 
 func (h *Handlers) systemStatus(c fiber.Ctx) error {

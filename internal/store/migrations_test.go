@@ -56,6 +56,27 @@ func TestMigrationRepairsClientServerIDs(t *testing.T) {
 	}
 }
 
+// A config written before the operator could save their own standard I1-I5
+// set gets an empty one: absent and empty mean the same thing - no override,
+// the shipped defaults stand - and the file serialises the field as an
+// object rather than null from then on.
+func TestMigrationGivesAnOldConfigAnEmptyDefaultISettings(t *testing.T) {
+	cfg := &AppConfig{SchemaVersion: 5, Servers: []api.Server{{ID: "s1"}}}
+
+	if !Migrate(cfg) {
+		t.Error("a config that needs the migration must be reported as changed")
+	}
+	if cfg.DefaultISettings == nil {
+		t.Error("DefaultISettings = nil, want an empty set")
+	}
+	if len(cfg.DefaultISettings) != 0 {
+		t.Errorf("DefaultISettings = %v, want an empty set", cfg.DefaultISettings)
+	}
+	if got := cfg.SchemaVersion; got != SchemaVersion {
+		t.Errorf("schema version = %d, want %d", got, SchemaVersion)
+	}
+}
+
 // An Endpoint equal to the server's PublicIP is what releases up to 3.1.9
 // wrote for every server created without an explicit endpoint: the detected
 // IP was copied into both fields, and the stored copy then won over the

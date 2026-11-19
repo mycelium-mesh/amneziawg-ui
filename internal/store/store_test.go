@@ -47,6 +47,25 @@ func TestSaveRoundTrips(t *testing.T) {
 	}
 }
 
+// The operator's own standard I1-I5 set exists to outlive the process:
+// that is the whole point of saving it instead of keeping it in a notepad.
+func TestSaveRoundTripsTheDefaultISettings(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "web_config.json"))
+	cfg := &AppConfig{
+		SchemaVersion:    SchemaVersion,
+		DefaultISettings: api.ISettings{"i1": "<b 0xaabb>", "i3": "<r 20>"},
+		Servers:          []api.Server{},
+	}
+	if err := s.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	got := s.Load()
+	if got.DefaultISettings["i1"] != "<b 0xaabb>" || got.DefaultISettings["i3"] != "<r 20>" {
+		t.Errorf("DefaultISettings after Save = %v, want the saved set", got.DefaultISettings)
+	}
+}
+
 func TestConcurrentSavesLeaveAValidConfig(t *testing.T) {
 	s := New(filepath.Join(t.TempDir(), "web_config.json"))
 	cfg := &AppConfig{Servers: []api.Server{{ID: "s1", Clients: []api.Client{{ID: "c1"}}}}}

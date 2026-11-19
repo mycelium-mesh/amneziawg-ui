@@ -258,6 +258,141 @@ func TestUpdateServerEndpointRejectsABrokenHost(t *testing.T) {
 	}
 }
 
+// The operator's own standard I1-I5 set is saved in the app: PUT merges the
+// keys it is given into the saved set (an absent or empty key holds no
+// opinion), GET answers with the effective one (the shipped values under the
+// saved non-empty ones), ServerInfo carries the same definition, a value the
+// shared CPS rules reject is a 400 that changes nothing, and DELETE is the
+// one full clear.
+func TestDefaultISettingsRoundTrip(t *testing.T) {
+	app, _, _ := newTestAPI(t)
+
+	// Nothing saved yet: GET is the shipped set.
+	status, body := call(t, app, http.MethodGet, "/api/default-i-settings", "")
+	if status != http.StatusOK {
+		t.Fatalf("initial GET: status = %d (%s)", status, body)
+	}
+	var effective api.ISettings
+	if err := json.Unmarshal(body, &effective); err != nil {
+		t.Fatal(err)
+	}
+	if effective["i1"] != wgconf.DefaultI1 {
+		t.Errorf("initial i1 = %q, want the shipped value", effective["i1"])
+	}
+
+	// PUT merges the keys it carries and answers with the effective one, in
+	// the same shape GET hands out.
+	status, body = call(t, app, http.MethodPut, "/api/default-i-settings",
+		`{"i1":"<b 0xaabb>","i2":"<r 20>"}`)
+	if status != http.StatusOK {
+		t.Fatalf("PUT: status = %d (%s)", status, body)
+	}
+	if err := json.Unmarshal(body, &effective); err != nil {
+		t.Fatal(err)
+	}
+	if effective["i1"] != "<b 0xaabb>" || effective["i2"] != "<r 20>" {
+		t.Errorf("PUT answered %s, want the effective set with the saved values", body)
+	}
+	if effective["i3"] != wgconf.DefaultI3 {
+		t.Errorf("PUT answered i3 = %q, want the shipped value underneath", effective["i3"])
+	}
+
+	// A second PUT with only one key filled in is the dialog's partial
+	// save: the earlier i1 must survive it, and i3 must still show the
+	// shipped value - no key ever saved stays "no override".
+	status, body = call(t, app, http.MethodPut, "/api/default-i-settings", `{"i2":"<r 30>"}`)
+	if status != http.StatusOK {
+		t.Fatalf("partial PUT: status = %d (%s)", status, body)
+	}
+	if err := json.Unmarshal(body, &effective); err != nil {
+		t.Fatal(err)
+	}
+	if effective["i1"] != "<b 0xaabb>" {
+		t.Errorf("partial PUT answered i1 = %q, want the previously saved value kept", effective["i1"])
+	}
+	if effective["i2"] != "<r 30>" {
+		t.Errorf("partial PUT answered i2 = %q, want the new value", effective["i2"])
+	}
+	if effective["i3"] != wgconf.DefaultI3 {
+		t.Errorf("partial PUT answered i3 = %q, want the shipped %q: nobody saved i3", effective["i3"], wgconf.DefaultI3)
+	}
+
+	// GET agrees with what PUT answered...
+	status, body = call(t, app, http.MethodGet, "/api/default-i-settings", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET after PUT: status = %d (%s)", status, body)
+	}
+	var roundTrip api.ISettings
+	if err := json.Unmarshal(body, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	if roundTrip["i1"] != "<b 0xaabb>" || roundTrip["i2"] != "<r 30>" {
+		t.Errorf("GET after PUT = %s, want the saved values", body)
+	}
+
+	// ...and so does ServerInfo, the other consumer of the one definition.
+	status, body = call(t, app, http.MethodGet, "/api/servers/s1/info", "")
+	if status != http.StatusOK {
+		t.Fatalf("info: status = %d (%s)", status, body)
+	}
+	var info api.ServerInfo
+	if err := json.Unmarshal(body, &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.DefaultISettings["i1"] != "<b 0xaabb>" {
+		t.Errorf("ServerInfo i1 = %q, want the saved value", info.DefaultISettings["i1"])
+	}
+
+	// A value the shared rules reject is a 400 through fail, like every
+	// other manager validation error, and it changes nothing.
+	for _, bad := range []string{`{"i1":"<b 0xabc>"}`, `{"i2":"text with no tags"}`, "{not json"} {
+		status, body = call(t, app, http.MethodPut, "/api/default-i-settings", bad)
+		if status != http.StatusBadRequest {
+			t.Errorf("body %s: status = %d, want 400 (%s)", bad, status, body)
+		}
+	}
+	status, body = call(t, app, http.MethodGet, "/api/default-i-settings", "")
+	if err := json.Unmarshal(body, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	if roundTrip["i1"] != "<b 0xaabb>" {
+		t.Errorf("after the rejected bodies i1 = %q, want the saved value untouched", roundTrip["i1"])
+	}
+
+	// An all-empty PUT - an empty object or an absent body - is "no
+	// opinion": 200 with the effective set, and nothing changes. The full
+	// clear is DELETE, the action "Restore shipped defaults" calls.
+	for _, empty := range []string{`{}`, ``} {
+		status, body = call(t, app, http.MethodPut, "/api/default-i-settings", empty)
+		if status != http.StatusOK {
+			t.Errorf("all-empty PUT %q: status = %d (%s)", empty, status, body)
+		}
+		status, body = call(t, app, http.MethodGet, "/api/default-i-settings", "")
+		if err := json.Unmarshal(body, &roundTrip); err != nil {
+			t.Fatal(err)
+		}
+		if roundTrip["i1"] != "<b 0xaabb>" || roundTrip["i2"] != "<r 30>" {
+			t.Errorf("after the all-empty PUT %q GET = %s, want the saved values untouched", empty, body)
+		}
+	}
+
+	status, body = call(t, app, http.MethodDelete, "/api/default-i-settings", "")
+	if status != http.StatusOK {
+		t.Fatalf("DELETE: status = %d (%s)", status, body)
+	}
+	status, body = call(t, app, http.MethodGet, "/api/default-i-settings", "")
+	if err := json.Unmarshal(body, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	if roundTrip["i1"] != wgconf.DefaultI1 || roundTrip["i2"] != wgconf.DefaultI2 {
+		t.Errorf("after DELETE GET = %s, want the shipped defaults", body)
+	}
+	// Clearing an already-clear set is a 200 no-op, not an error.
+	if status, body = call(t, app, http.MethodDelete, "/api/default-i-settings", ""); status != http.StatusOK {
+		t.Errorf("second DELETE: status = %d (%s)", status, body)
+	}
+}
+
 func TestActivatingAnActiveClientIsAConflict(t *testing.T) {
 	app, m, _ := newTestAPI(t)
 	client := addClient(t, m, "alice", false)

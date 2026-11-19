@@ -11,6 +11,7 @@ import (
 
 	"amneziawg-web-ui/internal/awg"
 	"amneziawg-web-ui/internal/netutil"
+	"amneziawg-web-ui/internal/store"
 	"amneziawg-web-ui/internal/wgconf"
 	"amneziawg-web-ui/web-ui/api"
 )
@@ -80,7 +81,7 @@ func (m *Manager) ServerInfo(id string) (api.ServerInfo, error) {
 		CreatedAt:          srv.CreatedAt,
 		PublicKey:          srv.ServerPublicKey,
 		DNS:                srv.DNS,
-		DefaultISettings:   wgconf.DefaultISettings(),
+		DefaultISettings:   m.DefaultISettings(),
 	}, nil
 }
 
@@ -270,30 +271,25 @@ func (m *Manager) UpdateServerEndpoint(serverID, endpoint string) (*api.Server, 
 		return nil, fmt.Errorf("%w: %s", ErrInvalid, problem)
 	}
 
-	m.mu.Lock()
-	srv := m.findServer(serverID)
-	if srv == nil {
-		m.mu.Unlock()
-		return nil, serverNotFound(serverID)
-	}
-	previous := srv.Endpoint
-	srv.Endpoint = endpoint
-	updated := cloneServer(srv)
-	updated.Clients = nil
-	m.mu.Unlock()
-
-	// A save error is reported here, not logged and swallowed: this is a
-	// change the operator asked for, and a silent failure would show
-	// "updated" in the UI while the old endpoint came back on the next
-	// restart. The in-memory value is put back as well, so the config
-	// does not claim an endpoint the disk does not have.
-	if err := m.SaveConfig(); err != nil {
-		m.mu.Lock()
-		if current := m.findServer(serverID); current != nil {
-			current.Endpoint = previous
+	// The assignment, the write and any rollback happen inside updateConfig,
+	// under one lock: a save error is reported here, not logged and
+	// swallowed, and the in-memory value goes back with the lock still held,
+	// so the config never claims an endpoint the disk does not have - not
+	// even between two overlapping updates.
+	var updated api.Server
+	err := m.updateConfig("the server endpoint", func(cfg *store.AppConfig) (func(), error) {
+		srv := m.findServer(serverID)
+		if srv == nil {
+			return nil, serverNotFound(serverID)
 		}
-		m.mu.Unlock()
-		return nil, fmt.Errorf("saving the server endpoint: %w", err)
+		previous := srv.Endpoint
+		srv.Endpoint = endpoint
+		updated = cloneServer(srv)
+		updated.Clients = nil
+		return func() { srv.Endpoint = previous }, nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return &updated, nil
 }

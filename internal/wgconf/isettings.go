@@ -13,8 +13,8 @@ const (
 	DefaultI5 = ""
 )
 
-// DefaultISettings is the I1-I5 set a new client starts from. One definition,
-// because it is served on its own and again inside every ServerInfo.
+// DefaultISettings is the standard I1-I5 set as shipped: the base layer
+// every effective set is built from, because MergeISettings starts here.
 func DefaultISettings() api.ISettings {
 	return api.ISettings{
 		"i1": DefaultI1, "i2": DefaultI2,

@@ -44,7 +44,7 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 	for i, entry := range iEntries {
 		key := fmt.Sprintf("i%d", i+1)
 		if value := defaults[key]; value != "" {
-			entry.SetPlaceHolder(lang.L("server default: {{.Value}}", map[string]any{"Value": widgets.Truncate(value, 40)}))
+			entry.SetPlaceHolder(lang.L("standard: {{.Value}}", map[string]any{"Value": widgets.Truncate(value, 40)}))
 		} else {
 			entry.SetPlaceHolder(lang.L("leave empty to skip"))
 		}
@@ -67,10 +67,34 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 		name.SetPlaceHolder(lang.L("New Client"))
 	}
 
+	// What each I-field held once the dialog was filled in: the edit form
+	// opens with the client's own record, the add form with nothing.
+	// "Save as my standard" writes only what has changed since, so an
+	// untouched pre-filled value never leaks into the standard, while in
+	// the add form every typed value counts as changed.
+	opened := make([]string, len(iEntries))
+	for i, entry := range iEntries {
+		opened[i] = strings.TrimSpace(entry.Text)
+	}
+
 	iBox := container.NewVBox()
 	for i, entry := range iEntries {
 		iBox.Add(widgets.Labeled(fmt.Sprintf("I%d", i+1), entry))
 	}
+	// The operator's own standard: the same five values this dialog writes
+	// per client, kept once as what every new client starts from. Both
+	// buttons live inside iBox, so they appear and vanish with the checkbox.
+	saveStandard := widgets.NewButton(lang.L("Save as my standard"), theme.DocumentSaveIcon(), func() {
+		saveAsStandard(e, iEntries, opened)
+	})
+	restoreStandard := widgets.NewButton(lang.L("Restore shipped defaults"), theme.ContentUndoIcon(), func() {
+		dialogs.Confirm(e.Win, lang.L("Restore shipped defaults"),
+			lang.L("Your saved standard will be replaced with the shipped defaults."),
+			func() {
+				defaultIAction(e, lang.L("Shipped defaults restored"), e.Backend.DeleteDefaultISettings)
+			})
+	})
+	iBox.Add(container.NewHBox(saveStandard, restoreStandard))
 	iNote := widget.NewLabel(lang.L("Each value describes one packet sent before the handshake, as a sequence of tags: " +
 		"<b 0x...> static bytes, <t> a 4-byte timestamp, <r N> random bytes, <rc N> random letters, <rd N> random digits " +
 		"(N up to 1000). Example: <b 0xd100000001><rc 8><t><r 50>. These are client-only parameters, they are never " +
@@ -130,7 +154,6 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 	}
 
 	dialogs.ShowForm(e.Win, title, confirm, lang.L("Cancel"), dialogs.Scrolled(content), dialogs.Size(e.Win, 760, 620), func() bool {
-		settings := api.ISettings{}
 		var problems []string
 
 		// The name lands in a file name, so it is checked as it was typed:
@@ -143,19 +166,7 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 			}
 		}
 
-		var iProblems []string
-		for i, entry := range iEntries {
-			value := strings.TrimSpace(entry.Text)
-			if value == "" {
-				continue
-			}
-			key := fmt.Sprintf("I%d", i+1)
-			if problem := api.ValidateCPS(key, value); problem != "" {
-				iProblems = append(iProblems, problem)
-				continue
-			}
-			settings[strings.ToLower(key)] = value
-		}
+		settings, iProblems := collectISettings(iEntries, nil)
 		// Only worth checking what will actually be written: with the box
 		// unticked the values are kept but never reach a config.
 		if applyI.Checked {
@@ -178,6 +189,71 @@ func ShowEditor(e *env.Env, server api.Server, client *api.Client) {
 		add(e, server, strings.TrimSpace(name.Text), routes, applyI.Checked, settings)
 		return true
 	})
+}
+
+// collectISettings reads the five I-fields the way every action in this
+// dialog treats them: trimmed, an empty value skipped as "no opinion", and
+// the rest checked with the shared key loop. changedFrom, when not nil, is
+// what each field held when the dialog was filled in - only fields whose
+// value differs from it are collected, so the dialog's confirm (nil: every
+// field as it stands) and the standard's save (only what changed) stay one
+// rule. It returns the values that would be written and the problems found
+// in the others.
+func collectISettings(iEntries []*widget.Entry, changedFrom []string) (api.ISettings, []string) {
+	settings := api.ISettings{}
+	var problems []string
+	for i, entry := range iEntries {
+		value := strings.TrimSpace(entry.Text)
+		if value == "" || (changedFrom != nil && value == changedFrom[i]) {
+			continue
+		}
+		key := fmt.Sprintf("I%d", i+1)
+		if problem := api.ValidateCPS(key, value); problem != "" {
+			problems = append(problems, problem)
+			continue
+		}
+		settings[strings.ToLower(key)] = value
+	}
+	return settings, problems
+}
+
+// saveAsStandard sends the fields the operator changed since the dialog
+// opened as their own standard: the backend merges them into the saved set
+// key by key, so a field that still holds what the dialog opened with - and
+// an emptied one - holds no opinion and the value already saved under its
+// key (or the shipped default, when nothing was ever saved there) stays.
+// Nothing is sent until the changed values pass the same rules the dialog's
+// confirm applies, and a save where nothing changed is a warning rather
+// than a PUT - untouched or blank fields must not even look like an offer
+// to wipe what was saved.
+func saveAsStandard(e *env.Env, iEntries []*widget.Entry, opened []string) {
+	settings, problems := collectISettings(iEntries, opened)
+	if len(problems) > 0 {
+		e.Notify.Fail(errors.New(strings.Join(problems, "\n")))
+		return
+	}
+	if len(settings) == 0 {
+		e.Notify.Warn(lang.L("Nothing changed in the I1-I5 fields - type the values to save, or use \"Restore shipped defaults\" to clear the saved standard"))
+		return
+	}
+	defaultIAction(e, lang.L("Standard I-settings saved"), func() error {
+		return e.Backend.PutDefaultISettings(settings)
+	})
+}
+
+// defaultIAction runs one write of the saved standard off the UI goroutine
+// and, once the backend confirms, refreshes the cached effective set so the
+// next dialog opens with the new placeholders. The notifier and the refresh
+// are safe from any goroutine.
+func defaultIAction(e *env.Env, done string, action func() error) {
+	go func() {
+		if err := action(); err != nil {
+			e.Notify.Fail(err)
+			return
+		}
+		e.RefreshDefaultI()
+		e.Notify.OK(done)
+	}()
 }
 
 // pickSuspendTime opens a calendar over the editor and writes the chosen

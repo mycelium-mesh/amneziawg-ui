@@ -25,6 +25,14 @@ type AppConfig struct {
 	// Clients slice of the server it belongs to. There is no second copy to
 	// keep in sync.
 	Servers []api.Server `json:"servers"`
+
+	// DefaultISettings is the operator's own standard I1-I5 set: the values
+	// layered over the shipped wgconf defaults wherever the standard set is
+	// used. Empty - or absent in a file written before this field existed -
+	// means no override, and the shipped defaults stand. Updates merge key
+	// by key (an empty request value is "no opinion" and leaves the stored
+	// state alone); the whole set leaves only through the explicit clear.
+	DefaultISettings api.ISettings `json:"default_i_settings"`
 }
 
 // Store reads and writes the config file at one path.
@@ -77,9 +85,10 @@ func (s *Store) Load() *AppConfig {
 }
 
 // Save writes cfg to disk atomically. The caller must keep cfg from changing
-// for the duration - the manager holds its read lock across the call - since
+// for the duration - the manager holds its config lock across the call - since
 // the snapshot is taken here, under mu, so that concurrent saves land in the
-// order they serialised.
+// order they serialised. A failed write leaves the previous file contents in
+// place: the new bytes only ever arrive by rename.
 func (s *Store) Save(cfg *AppConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
