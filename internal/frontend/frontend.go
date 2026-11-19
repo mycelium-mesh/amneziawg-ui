@@ -63,9 +63,9 @@ func (a *Assets) Mount(app *fiber.App) {
 
 // packedAssets maps a request path to the pre-compressed file that answers it.
 // "make web-ui" leaves the bundle on disk uncompressed, but the Docker build
-// gzips it and the image ships bundle.wasm.gz alone: that is 14 MB instead of
-// 49 MB of layer, and it spares the server from gzipping the same 49 MB on
-// every cold request.
+// gzips it and the image ships bundle.wasm.gz alone: the layer holds the
+// compressed bundle rather than the raw one, and it spares the server from
+// gzipping it again on every cold request.
 func packedAssets(files fs.FS, root string) map[string]string {
 	packed := map[string]string{}
 

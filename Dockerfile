@@ -23,9 +23,18 @@ COPY . .
 # emits the loader page, its stylesheets and the bundle straight into
 # web-ui/wasm.
 #
-# The bundle then ships gzipped and nothing else: 14 MB of layer instead of 49,
-# and the server hands the file over as it is rather than compressing 49 MB
-# again on every cold request (see packedAssets in main.go).
+# The bundle then ships gzipped and nothing else: the layer holds the
+# compressed bundle rather than the raw one, and the server hands the file
+# over as it is rather than compressing it again on every cold request (see
+# packedAssets in main.go).
+#
+# The two build tags are the Makefile's WASM_TAGS spelled out inline, so both
+# pipelines ship an identically marked bundle: no_emoji drops the built-in
+# EmojiOneColor font (about 4 MB raw - the trade-off is that emoji in user
+# names stop rendering; the UI itself has no emoji literals) and
+# nethttpomithttp2 drops the HTTP/2 code, which the bundle never uses since
+# the browser's fetch owns the transport. The grep after packaging fails the
+# build if the font ever comes back.
 #
 # GOOS=js output is identical for every target platform, so this stage names no
 # TARGETARCH and BuildKit builds it once for the whole multi-platform image.
@@ -48,7 +57,8 @@ RUN --mount=type=cache,id=awg_mod,target=/go/pkg/mod \
     else \
         echo "frontend version: no git tag in the build context, keeping FyneApp.toml"; \
     fi \
-    && cd web-ui && go tool fyne package -os wasm --name bundle --release \
+    && cd web-ui && go tool fyne package -os wasm --name bundle --release --tags no_emoji,nethttpomithttp2 \
+    && ! grep -Fq 'EmojiOneColor' wasm/bundle.wasm \
     && gzip -9 wasm/bundle.wasm
 
 # ── Backend ───────────────────────────────────────────────────────

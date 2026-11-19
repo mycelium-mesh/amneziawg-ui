@@ -27,6 +27,15 @@ help: ## List all available commands
 # this file name.
 WASM_NAME = bundle
 
+# Build tags "fyne package" passes on to go build. no_emoji drops the built-in
+# EmojiOneColor font - about 4 MB raw, a third of the gzipped bundle; the
+# trade-off is that emoji in user names stop rendering (the UI itself has no
+# emoji literals). nethttpomithttp2 drops the HTTP/2 code, which the wasm
+# bundle never uses: the browser's fetch owns the transport. The Dockerfile
+# frontend stage spells the same two tags out inline, so both pipelines ship
+# an identically marked bundle.
+WASM_TAGS = no_emoji,nethttpomithttp2
+
 # Reproducible, stripped builds. "fyne package --release" already applies the
 # same two to the wasm bundle itself, so only the server needs them spelled
 # out here.
@@ -39,7 +48,8 @@ WASM_DIR = web-ui/wasm
 
 .PHONY: web-ui
 web-ui: check-go web-ui-version web-ui-clean ## Build the Fyne WebAssembly frontend into web-ui/wasm/
-	cd web-ui && go tool fyne package -os wasm --name $(WASM_NAME) --release
+	cd web-ui && go tool fyne package -os wasm --name $(WASM_NAME) --release --tags $(WASM_TAGS)
+	@$(MAKE) --no-print-directory web-ui-check
 
 # The header shows the release the bundle was built from, and "fyne package"
 # reads that release out of FyneApp.toml (bumping Build there itself on every
@@ -62,6 +72,30 @@ web-ui-version: ## Sync Version in web-ui/FyneApp.toml with the newest git tag
 web-ui-clean: ## Remove the built frontend bundle
 	rm -rf $(WASM_DIR)
 	mkdir -p $(WASM_DIR)
+
+# The tags above only count if they reach the bundle; without them it grows by
+# a third again. This asserts that on the artifact itself: no_emoji is proved
+# by the EmojiOneColor font's own name being gone, nethttpomithttp2 by the
+# HTTP/2 connection preface being gone, and the gzipped size - what the server
+# ships - by a ceiling only the untagged bundle crosses (over 11 MB against
+# 8 MiB here). A unit test cannot cover this: the tags are build-time asset
+# selection, so the evidence only exists in a packaged bundle.
+.PHONY: web-ui-check
+web-ui-check: ## Verify the built bundle lost the emoji font and HTTP/2
+	@bundle=$(WASM_DIR)/bundle.wasm; \
+	if [ ! -f "$$bundle" ]; then \
+		echo "web-ui-check: no bundle at $$bundle - build it with make web-ui first"; \
+		exit 1; \
+	fi; \
+	if LC_ALL=C grep -Fq 'EmojiOneColor' "$$bundle"; then \
+		echo "web-ui-check: bundle still embeds the EmojiOneColor emoji font - the no_emoji tag did not reach go build"; \
+		exit 1; \
+	fi; \
+	if LC_ALL=C grep -Fq 'PRI * HTTP/2.0' "$$bundle"; then \
+		echo "web-ui-check: bundle still carries HTTP/2 code - the nethttpomithttp2 tag did not reach go build"; \
+		exit 1; \
+	fi; \
+	echo "  web-ui-check: no emoji font, no HTTP/2"
 
 ##@ Backend
 
