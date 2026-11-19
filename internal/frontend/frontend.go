@@ -8,6 +8,7 @@ package frontend
 import (
 	"compress/gzip"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"io"
 	"io/fs"
@@ -111,12 +112,20 @@ func (a *Assets) sendPacked() fiber.Handler {
 		// all unless asked to, and the bundle has to stay readable by a client
 		// that will not decompress it itself.
 		if !strings.Contains(c.Get(fiber.HeaderAcceptEncoding), "gzip") {
+			// The length of the unpacked bundle is read before the first
+			// byte is decompressed, so the identity response carries a
+			// Content-Length instead of chunking a body whose length was
+			// known all along.
+			size, known := gzipISize(file)
 			unpacked, err := gzip.NewReader(file)
 			if err != nil {
 				file.Close() //nolint:errcheck
 				return err
 			}
-			return c.SendStream(gzipFile{Reader: unpacked, file: file})
+			if !known {
+				return c.SendStream(gzipFile{Reader: unpacked, file: file})
+			}
+			return c.SendStream(gzipFile{Reader: unpacked, file: file}, size)
 		}
 
 		c.Set(fiber.HeaderContentEncoding, "gzip")
@@ -127,6 +136,35 @@ func (a *Assets) sendPacked() fiber.Handler {
 		}
 		return c.SendStream(file, int(info.Size()))
 	}
+}
+
+// gzipISize is the length of the decompressed data, which the gzip format
+// writes into the last four bytes of the file. The count is modulo 2^32,
+// which is plenty for a bundle measured in tens of megabytes.
+//
+// A file that cannot seek has no footer to read at its end, and the caller
+// falls back to a chunked body. The stream is left at its start: the
+// decompressor that reads it next sees a fresh file.
+func gzipISize(file fs.File) (int, bool) {
+	seeker, ok := file.(io.Seeker)
+	if !ok {
+		return 0, false
+	}
+	end, err := seeker.Seek(0, io.SeekEnd)
+	if err != nil || end < 4 {
+		return 0, false
+	}
+	if _, err := seeker.Seek(end-4, io.SeekStart); err != nil {
+		return 0, false
+	}
+	var footer [4]byte
+	if _, err := io.ReadFull(file, footer[:]); err != nil {
+		return 0, false
+	}
+	if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+		return 0, false
+	}
+	return int(binary.LittleEndian.Uint32(footer[:])), true
 }
 
 // gzipFile ties the decompressor to the file underneath it. fasthttp closes
@@ -187,6 +225,15 @@ func (a *Assets) cache() fiber.Handler {
 
 		c.Set(fiber.HeaderCacheControl, "no-cache")
 		c.Set(fiber.HeaderETag, tag)
+
+		// A packed asset is negotiated by Accept-Encoding, so its 304 has
+		// to say the same: without the header a cache is free to hand the
+		// gzipped bundle to a client that never asked for gzip (RFC 9110
+		// §15.4.5).
+		if _, packed := a.packed[c.Path()]; packed {
+			c.Vary(fiber.HeaderAcceptEncoding)
+		}
+
 		if etagMatches(c.Get(fiber.HeaderIfNoneMatch), tag) {
 			return c.SendStatus(fiber.StatusNotModified)
 		}

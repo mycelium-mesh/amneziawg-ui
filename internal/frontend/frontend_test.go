@@ -106,3 +106,48 @@ func TestEtagMatches(t *testing.T) {
 		}
 	}
 }
+
+// A client that did not ask for gzip gets the bundle unpacked, and the
+// response carries its length: the gzip footer says how long the unpacked
+// bundle is before its first byte is decompressed, so the body need not be
+// chunked.
+func TestIdentityResponseCarriesItsLength(t *testing.T) {
+	app := newApp(t)
+
+	resp := get(t, app, "/bundle.wasm", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if resp.ContentLength != int64(len("\x00asm")) {
+		t.Errorf("content length = %d, want %d", resp.ContentLength, len("\x00asm"))
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if len(body) != int(resp.ContentLength) {
+		t.Errorf("body is %d bytes, the header says %d", len(body), resp.ContentLength)
+	}
+}
+
+// The bundle is negotiated by Accept-Encoding - the same URL is the
+// gzipped bundle or the unpacked one - so a 304 has to say the same.
+// Without the header a cache is free to hand the gzipped bundle to a client
+// that never asked for gzip.
+func TestNotModifiedSaysWhatItVariesOn(t *testing.T) {
+	app := newApp(t)
+
+	first := get(t, app, "/bundle.wasm", map[string]string{"Accept-Encoding": "gzip"})
+	tag := first.Header.Get("ETag")
+	if tag == "" {
+		t.Fatal("the response carries no ETag")
+	}
+
+	again := get(t, app, "/bundle.wasm", map[string]string{
+		"Accept-Encoding": "gzip",
+		"If-None-Match":   tag,
+	})
+	if again.StatusCode != 304 {
+		t.Fatalf("status = %d, want 304", again.StatusCode)
+	}
+	if vary := again.Header.Get("Vary"); vary != "Accept-Encoding" {
+		t.Errorf("vary = %q, want Accept-Encoding", vary)
+	}
+}
