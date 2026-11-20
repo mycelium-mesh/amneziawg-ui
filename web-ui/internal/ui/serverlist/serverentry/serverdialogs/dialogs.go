@@ -145,59 +145,25 @@ func ShowEndpointEditor(e *env.Env, srv api.Server) {
 	})
 
 	dialogs.ShowForm(e.Win, lang.L("Edit endpoint of {{.Name}}", map[string]any{"Name": srv.Name}),
-		lang.L("Save"), lang.L("Cancel"), content, dialogs.Size(e.Win, 560, 200),
-		endpointConfirm(e.Backend, e.Notify, e.Reload, srv, endpoint))
-}
-
-// endpointBackend is the pair of calls the endpoint editor's save makes on
-// the backend; *backend.Client satisfies it. It is named here so the save
-// decision can be exercised against a stub that counts the calls.
-type endpointBackend interface {
-	Servers() ([]api.Server, error)
-	UpdateServerEndpoint(serverID, endpoint string) error
-}
-
-// endpointConfirm builds the confirm path of ShowEndpointEditor: what "Save"
-// does with what the entry holds. Split out, body unchanged, so a test can
-// reach the decision - which is why the page's parts come in named rather
-// than as the env. The result reports whether the dialog is finished, the
-// contract dialogs.ShowForm documents: false leaves it open over what was
-// typed.
-func endpointConfirm(save endpointBackend, notify env.Notifier, reload func(), srv api.Server, endpoint *widget.Entry) func() bool {
-	return func() bool {
-		value := strings.TrimSpace(endpoint.Text)
-		// The endpoint lands in a generated client .conf, so the
-		// shared rule checks it before the request, like the create
-		// form and the server-side create do.
-		if problem := api.ValidateEndpoint(value); problem != "" {
-			notify.Fail(errors.New(lang.L(problem)))
-			return false
-		}
-		go func() {
-			// "Nothing changed" is decided against the endpoint the
-			// server holds now, not the snapshot this dialog was opened
-			// with: the card hands that snapshot to its buttons when it
-			// renders, and the render runs on the UI goroutine, which a
-			// slow frame can hold up past the next click. Against a stale
-			// "" a confirmed clear reads as "nothing changed" and the
-			// dialog closes without sending anything - the save is
-			// dropped in silence.
-			if current, err := save.Servers(); err == nil {
-				for _, other := range current {
-					if other.ID == srv.ID && other.Endpoint == value {
-						return // nothing changed, nothing to send
-					}
+		lang.L("Save"), lang.L("Cancel"), content, dialogs.Size(e.Win, 560, 200), func() bool {
+			value := strings.TrimSpace(endpoint.Text)
+			// The endpoint lands in a generated client .conf, so the
+			// shared rule checks it before the request, like the create
+			// form and the server-side create do.
+			if problem := api.ValidateEndpoint(value); problem != "" {
+				e.Notify.Fail(errors.New(lang.L(problem)))
+				return false
+			}
+			go func() {
+				if err := e.Backend.UpdateServerEndpoint(srv.ID, value); err != nil {
+					e.Notify.Fail(err)
+					return
 				}
-			}
-			if err := save.UpdateServerEndpoint(srv.ID, value); err != nil {
-				notify.Fail(err)
-				return
-			}
-			notify.OK(lang.L("Endpoint of \"{{.Name}}\" updated", map[string]any{"Name": srv.Name}))
-			reload()
-		}()
-		return true
-	}
+				e.Notify.OK(lang.L("Endpoint of \"{{.Name}}\" updated", map[string]any{"Name": srv.Name}))
+				e.Reload()
+			}()
+			return true
+		})
 }
 
 func obfuscationGrid(p *api.ObfuscationParams) fyne.CanvasObject {
