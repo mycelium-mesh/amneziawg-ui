@@ -147,9 +147,6 @@ func ShowEndpointEditor(e *env.Env, srv api.Server) {
 	dialogs.ShowForm(e.Win, lang.L("Edit endpoint of {{.Name}}", map[string]any{"Name": srv.Name}),
 		lang.L("Save"), lang.L("Cancel"), content, dialogs.Size(e.Win, 560, 200), func() bool {
 			value := strings.TrimSpace(endpoint.Text)
-			if value == srv.Endpoint {
-				return true // nothing changed, nothing to send
-			}
 			// The endpoint lands in a generated client .conf, so the
 			// shared rule checks it before the request, like the create
 			// form and the server-side create do.
